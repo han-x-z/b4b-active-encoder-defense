@@ -1,5 +1,5 @@
 python evaluate_stolen_model.py simsiam \
---dataset stl10 \
+--dataset cifar10 \
 --lam 0.000001 \
 --alpha 1 \
 --beta 60 \
@@ -16,4 +16,5 @@ python evaluate_stolen_model.py simsiam \
 --workers 2  \
 --epochs 100 \
 --gpu 6 \
---modeltype "stolen" 
+--enhance_attack 'False' \
+--modeltype "stolen"

@@ -17,4 +17,5 @@ python evaluate_stolen_model.py simsiam \
 --workers 2  \
 --epochs 50 \
 --gpu 6 \
+--enhance_attack 'False' \
 --modeltype "stolen" 
