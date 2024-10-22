@@ -346,7 +346,7 @@ def main_worker(gpu, ngpus_per_node, buckets_covered, args):
     global best_acc1
     args.gpu = gpu
     log_dir = f"{args.pathpre}/{args.model_to_steal}/"
-    logname = f"stealing_{args.datasetsteal}_{args.num_queries}_{args.losstype}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_enhance_attack{args.enhance_attack}.log"
+    logname = f"stealing_{args.datasetsteal}_{args.num_queries}_{args.losstype}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_enhance_attack_{args.enhance_attack}.log"
     os.makedirs(log_dir, exist_ok=True)
     logging.basicConfig(filename=os.path.join(log_dir, logname), level=logging.DEBUG)
 
@@ -942,7 +942,7 @@ def save_checkpoint(state, is_best, args):
     if is_best:
         torch.save(
             state,
-            f"{args.pathpre}/{args.model_to_steal}/checkpoint_{args.datasetsteal}_{args.losstype}_{args.num_queries}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_enhance_attack{args.enhance_attack}.pth.tar",
+            f"{args.pathpre}/{args.model_to_steal}/checkpoint_{args.datasetsteal}_{args.losstype}_{args.num_queries}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_enhance_attack_{args.enhance_attack}.pth.tar",
         )
 
 
@@ -1005,7 +1005,7 @@ def extract_features(
     args,
 ):
     # 定义保存路径
-    victim_features_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_output_enhance_attack{args.enhance_attack}.npz"
+    victim_features_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_output_enhance_attack_{args.enhance_attack}.npz"
 
     # 确保输出文件夹存在
     os.makedirs(f"{args.prefix}/outputs", exist_ok=True)
@@ -1013,94 +1013,63 @@ def extract_features(
     # 检查文件是否已经存在
     if os.path.exists(victim_features_path):
         print(f"File {victim_features_path} already exists. Skipping extraction.")
-        return  # 如果文件存在，直接返回，跳过后续处理
-
+        return
 
     # 累积所有批次的特征
     victim_features_list = []
 
     # 初始化查询计数器
     num_q = 0
-    print("args.enhance_attack:",args.enhance_attack)
-    # 遍历整个数据集
+
     with torch.no_grad():  # 不计算梯度，加快推理速度
         for i, (images, _) in enumerate(data_loader):
+            images = images.cuda()
 
-            # 如果启用强化攻击
-            if args.enhance_attack == "True":
-                repeat_times = 8  # 根据需要设定重复的次数
-                repeated_images = torch.cat([images] * repeat_times, dim=0)
-                repeated_images = repeated_images.cuda()
-
-                # Compute output with repeated images
-                if args.model_to_steal == "dino" and "vit" in args.archdino:
-                    intermediate_output = victim_model.get_intermediate_layers(repeated_images, args.n_last_blocks)
-                    victim_features = torch.cat([x[:, 0] for x in intermediate_output], dim=-1)
-                    if args.avgpool_patchtokens:
-                        victim_features = torch.cat(
-                            (
-                                victim_features.unsqueeze(-1),
-                                torch.mean(intermediate_output[-1][:, 1:], dim=1).unsqueeze(-1),
-                            ),
-                            dim=-1,
-                        )
-                        victim_features = victim_features.reshape(victim_features.shape[0], -1)
-                else:
-                    victim_features = victim_model(repeated_images)
-
-                # 防御机制: 计算方差并添加高斯噪声
-                if args.usedefence == "True":
-                    g_cuda = torch.Generator()
-                    g_cuda.manual_seed(i)
-                    stdev_value = get_stdev(i, buckets_covered, args.lam, args.alpha, args.beta)
-                    print(i, stdev_value, buckets_covered[i])  # TODO
-                    victim_features = (
-                        victim_features
-                        + torch.normal(
-                            0, stdev_value, size=victim_features.shape, generator=g_cuda
-                        ).cuda()
+            # 计算 victim_model 的特征
+            if args.model_to_steal == "dino" and "vit" in args.archdino:
+                intermediate_output = victim_model.get_intermediate_layers(images, args.n_last_blocks)
+                victim_features = torch.cat([x[:, 0] for x in intermediate_output], dim=-1)
+                if args.avgpool_patchtokens:
+                    victim_features = torch.cat(
+                        (
+                            victim_features.unsqueeze(-1),
+                            torch.mean(intermediate_output[-1][:, 1:], dim=1).unsqueeze(-1),
+                        ),
+                        dim=-1,
                     )
-
-                # 对重复的特征取平均
-                victim_features = repeat_and_average(victim_features, repeat_times)
-
+                    victim_features = victim_features.reshape(victim_features.shape[0], -1)
             else:
-                # 普通提取特征的路径
-                images = images.cuda()
+                victim_features = victim_model(images)
 
-                # 计算 victim_model 的特征
-                if args.model_to_steal == "dino" and "vit" in args.archdino:
-                    intermediate_output = victim_model.get_intermediate_layers(images, args.n_last_blocks)
-                    victim_features = torch.cat([x[:, 0] for x in intermediate_output], dim=-1)
-                    if args.avgpool_patchtokens:
-                        victim_features = torch.cat(
-                            (
-                                victim_features.unsqueeze(-1),
-                                torch.mean(intermediate_output[-1][:, 1:], dim=1).unsqueeze(-1),
-                            ),
-                            dim=-1,
-                        )
-                        victim_features = victim_features.reshape(victim_features.shape[0], -1)
-                else:
-                    victim_features = victim_model(images)
-
-                # 防御机制: 计算方差并添加高斯噪声
-                if args.usedefence == "True":
-                    g_cuda = torch.Generator()
-                    g_cuda.manual_seed(i)
-                    stdev_value = get_stdev(i, buckets_covered, args.lam, args.alpha, args.beta)
-                    print(i, stdev_value, buckets_covered[i])  # TODO
+            # 1. 防御机制: 计算方差并添加高斯噪声
+            if args.usedefence == "True":
+                g_cuda = torch.Generator()
+                g_cuda.manual_seed(i)
+                stdev_value = get_stdev(i, buckets_covered, args.lam, args.alpha, args.beta)
+                # 2. 判断是否启用强化攻击
+                if args.enhance_attack == "True":
+                    repeat_times = 8  # 设定重复的次数
+                    # 将特征重复，并计算去噪
+                    victim_features = victim_features.repeat(repeat_times, 1)
                     victim_features = (
                         victim_features
                         + torch.normal(
                             0, stdev_value, size=victim_features.shape, generator=g_cuda
                         ).cuda()
                     )
-
+                    # 对重复的特征取平均，进行去噪
+                    victim_features = repeat_and_average(victim_features, repeat_times)
+                else:
+                    victim_features = (
+                        victim_features
+                        + torch.normal(
+                            0, stdev_value, size=victim_features.shape, generator=g_cuda
+                        ).cuda()
+                    )
             # 将 victim_model 的特征保存到列表中
             victim_features_list.append(victim_features.cpu().numpy())
             # 累加已经处理的查询数量
-            num_q += len(images)   #TODO
+            num_q += len(images)
 
             if i % args.print_freq == 0:
                 print(f"Processed batch {i}/{len(data_loader)}, Total queries: {num_q}")
@@ -1113,7 +1082,6 @@ def extract_features(
     # 保存 victim model 的特征为 npz 文件
     np.savez(victim_features_path, np.concatenate(victim_features_list, axis=0))
     print(f"Victim features saved to {victim_features_path}")
-
 
 
 # 自定义 Dataset 类，只使用 victim features
@@ -1177,7 +1145,7 @@ def train_clone_model(
     num = 0
     stealing_model.train()
     # 加载数据
-    victim_feature_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_output_enhance_attack{args.enhance_attack}.npz"
+    victim_feature_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_output_enhance_attack_{args.enhance_attack}.npz"
     # 创建数据集
     victim_feature_dataset = VictimFeatureDataset(victim_feature_path)
     victim_feature_loader = DataLoader(victim_feature_dataset, batch_size=args.batch_size, shuffle=False)
@@ -1189,7 +1157,6 @@ def train_clone_model(
         # 打印第一个 batch 的前几项具体值
         print("Victim Feature Values (first 5 values of first batch):")
         print(victim_feature[:5])  # 只输出前 5 个特征值
-
         break  # 只输出第一个 batch
 
     size = 224
