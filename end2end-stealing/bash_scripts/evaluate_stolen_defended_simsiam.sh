@@ -1,0 +1,19 @@
+python evaluate_stolen_model.py simsiam \
+--dataset stl10 \
+--lam 0.000001 \
+--alpha 1 \
+--beta 60 \
+--num_queries 50000 \
+--n_sybils 1 \
+--usedefence 'True' \
+--world-size -1 \
+--rank 0  \
+--data /workspace/b4b-active-encoder-defense/datasets/ImageNet \
+--batch-size 256 \
+--lr 0.1 \
+--losstype 'infonce' \
+--datasetsteal 'imagenet' \
+--workers 2  \
+--epochs 100 \
+--gpu 6 \
+--modeltype "stolen" 
