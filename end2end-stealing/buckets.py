@@ -305,8 +305,8 @@ def add_common_arguments(parser):
     )
 
 def compute_buckets_covered(args, proj_count=20):
-    buckets_file_path = f"{args.prefix}/resources/coverage/buckets_covered_{args.model_to_steal}_{args.datasetsteal}_{combined_batch_size}_enhance_attack{args.enhance_attack}.npy"
-    features_file_path = f"{args.prefix}/resources/mapping_features/victim_features_{args.model_to_steal}_{args.datasetsteal}_{args.num_queries_mapping}_enhance_attack{args.enhance_attack}.npz"
+    buckets_file_path = f"{args.prefix}/resources/coverage/buckets_covered_{args.model_to_steal}_{args.datasetsteal}_{combined_batch_size}_enhance_attack_{args.enhance_attack}.npy"
+    features_file_path = f"{args.prefix}/resources/mapping_features/victim_features_{args.model_to_steal}_{args.datasetsteal}_{args.num_queries_mapping}_enhance_attack_{args.enhance_attack}.npz"
 
     try:
         print(f"Trying to load buckets from file {buckets_file_path}")
