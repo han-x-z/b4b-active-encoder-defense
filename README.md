@@ -14,7 +14,7 @@ pip install wandb
 * Make sure you have access to project given by `<wandb_entity>/<wandb_project>` from [config](config)
 * Set [src](src) directory as PYTHONPATH
 ```bash
-export PYTHONPATH=${PYTHONPATH}:./workspace/1/b4b-active-encoder-defense/end2end-stealing/src
+export PYTHONPATH=${PYTHONPATH}:./workspace/b4b-active-encoder-defense/end2end-stealing/
 ```
 * Download SimSiam ResNet50 checkpoint pretrained on ImageNet from https://dl.fbaipublicfiles.com/simsiam/models/100ep/pretrain/checkpoint_0099.pth.tar and place in ./end2end_stealing/pretrained_weights
 * Download DINO VitS16 pretrained on ImageNet from https://dl.fbaipublicfiles.com/dino/dino_deitsmall16_pretrain/dino_deitsmall16_pretrain_full_checkpoint.pth and place in ./end2end_stealing/pretrained_weights
