@@ -278,7 +278,7 @@ def main_worker(gpu, ngpus_per_node, args):
     args.gpu = gpu
     if args.modeltype == "stolen":
         log_dir = f"{args.pathpre}/{args.model_to_steal}/"
-        logname = f"testing{args.datasetsteal}{args.num_queries}{args.losstype}{args.dataset}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_enhance_attack{args.enhance_attack}.log"
+        logname = f"testing{args.datasetsteal}{args.num_queries}{args.losstype}{args.dataset}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_enhance_attack{args.enhance_attack}_useaug_{args.useaug}.log"
         os.makedirs(log_dir, exist_ok=True)
         logging.basicConfig(
             filename=os.path.join(log_dir, logname), level=logging.DEBUG
@@ -362,7 +362,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     if args.modeltype == "stolen":
         checkpoint = torch.load(
-            f"{args.pathpre}/{args.model_to_steal}/checkpoint_imagenet_infonce_{args.num_queries}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_enhance_attack{args.enhance_attack}.pth.tar",
+            f"{args.pathpre}/{args.model_to_steal}/checkpoint_imagenet_infonce_{args.num_queries}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_enhance_attack{args.enhance_attack}_useaug_{args.useaug}.pth.tar",
             map_location="cpu",
         )
         state_dict = checkpoint["state_dict"]
