@@ -942,7 +942,7 @@ def save_checkpoint(state, is_best, args):
     if is_best:
         torch.save(
             state,
-            f"{args.pathpre}/{args.model_to_steal}/checkpoint_{args.datasetsteal}_{args.losstype}_{args.num_queries}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_enhance_attack_{args.enhance_attack}_useaug_{args.useaug}.pth.tar",
+            f"{args.pathpre}/{args.model_to_steal}/checkpoint_{args.datasetsteal}_{args.losstype}_{args.num_queries}_batchsize_{args.batch_size}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_enhance_attack_{args.enhance_attack}_useaug_{args.useaug}.pth.tar",
         )
 
 
@@ -1005,7 +1005,7 @@ def extract_features(
     args,
 ):
     # 定义保存路径
-    victim_features_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_output_enhance_attack_{args.enhance_attack}.npz"
+    victim_features_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_batchsize_{args.batch_size}_output_enhance_attack_{args.enhance_attack}.npz"
 
     # 确保输出文件夹存在
     os.makedirs(f"{args.prefix}/outputs", exist_ok=True)
@@ -1145,7 +1145,7 @@ def train_clone_model(
     num = 0
     stealing_model.train()
     # 加载数据
-    victim_feature_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_output_enhance_attack_{args.enhance_attack}.npz"
+    victim_feature_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_batchsize_{args.batch_size}_output_enhance_attack_{args.enhance_attack}.npz"
     # 创建数据集
     victim_feature_dataset = VictimFeatureDataset(victim_feature_path)
     victim_feature_loader = DataLoader(victim_feature_dataset, batch_size=args.batch_size, shuffle=False)
@@ -1166,11 +1166,12 @@ def train_clone_model(
     to_pil = transforms.ToPILImage()
     data_transforms = transforms.Compose(
         [
-            transforms.RandomResizedCrop(size=size),
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomApply([color_jitter], p=0.8),
-            transforms.RandomGrayscale(p=0.2),
-            GaussianBlur(kernel_size=int(0.1 * size)),
+            #transforms.RandomResizedCrop(size=size),
+            #transforms.RandomHorizontalFlip(),
+            #transforms.RandomApply([color_jitter], p=0.8),
+            #transforms.RandomGrayscale(p=0.2),
+            #GaussianBlur(kernel_size=int(0.1 * size)),
+
         ]
     )
 
