@@ -272,7 +272,9 @@ def add_common_arguments(parser):
         default="False",
         type=str,
     )
-
+    parser.add_argument(
+        "--useaug", default="False", type=str, help="Use augmentations with stealing"
+    )
 def main_worker(gpu, ngpus_per_node, args):
     global best_acc1
     args.gpu = gpu

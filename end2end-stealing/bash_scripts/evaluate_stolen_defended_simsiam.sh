@@ -13,8 +13,9 @@ python evaluate_stolen_model.py simsiam \
 --lr 0.1 \
 --losstype 'infonce' \
 --datasetsteal 'imagenet' \
---workers 2  \
+--workers 8  \
+--useaug 'False' \
 --epochs 100 \
---gpu 6 \
+--gpu 7 \
 --enhance_attack 'False' \
 --modeltype "stolen"
