@@ -446,6 +446,35 @@ def main_worker(gpu, ngpus_per_node, buckets_covered, args):
     buckets_covered,
     args,
     )
+    if args.datasetsteal == "imagenet":
+        traindir = os.path.join(args.data, "train")
+        valdir = os.path.join(args.data, "val")
+        normalize = transforms.Normalize(
+            mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+        )
+        train_dataset = datasets.ImageFolder(
+            traindir,
+            transforms.Compose(
+                [
+                    transforms.RandomResizedCrop(224),
+                    transforms.RandomHorizontalFlip(),
+                    #transforms.Resize(256),
+                    #transforms.CenterCrop(224),
+                    transforms.ToTensor(),
+                     normalize,
+                ]
+            ),
+        )
+        query_loader = torch.utils.data.DataLoader(
+                train_dataset,
+                batch_size=args.batch_size,
+                shuffle=False,  # (train_sampler is None),
+                num_workers=args.workers,
+                pin_memory=True,
+                sampler=train_sampler,
+                drop_last=True,
+            )
+        print("Datasets setting already!")
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
@@ -1005,7 +1034,7 @@ def extract_features(
     args,
 ):
     # 定义保存路径
-    victim_features_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_batchsize_{args.batch_size}_output_enhance_attack_{args.enhance_attack}.npz"
+    victim_features_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_{args.num_queries}_batchsize_{args.batch_size}_output_enhance_attack_{args.enhance_attack}.npz"
 
     # 确保输出文件夹存在
     os.makedirs(f"{args.prefix}/outputs", exist_ok=True)
@@ -1048,7 +1077,7 @@ def extract_features(
                 stdev_value = get_stdev(i, buckets_covered, args.lam, args.alpha, args.beta)
                 # 2. 判断是否启用强化攻击
                 if args.enhance_attack == "True":
-                    repeat_times = 8  # 设定重复的次数
+                    repeat_times = 16  # 设定重复的次数
                     # 将特征重复，并计算去噪
                     victim_features = victim_features.repeat(repeat_times, 1)
                     victim_features = (
@@ -1145,7 +1174,7 @@ def train_clone_model(
     num = 0
     stealing_model.train()
     # 加载数据
-    victim_feature_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_batchsize_{args.batch_size}_output_enhance_attack_{args.enhance_attack}.npz"
+    victim_feature_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_{args.num_queries}_batchsize_{args.batch_size}_output_enhance_attack_{args.enhance_attack}.npz"
     # 创建数据集
     victim_feature_dataset = VictimFeatureDataset(victim_feature_path)
     victim_feature_loader = DataLoader(victim_feature_dataset, batch_size=args.batch_size, shuffle=False)
@@ -1334,7 +1363,7 @@ def train(
     #print(f"train_loader.batch_size: {train_loader.batch_size}")
     for i, (images, classes) in enumerate(train_loader):
         # 如果我们想要每个输入重复 2 次，可以这样处理
-        repeat_times = 8  # 你可以根据需要设定重复的次数，例如2次、4次等
+        repeat_times = 16  # 你可以根据需要设定重复的次数，例如2次、4次等
         repeated_images = torch.cat([images] * repeat_times, dim=0)
         repeated_images = repeated_images.cuda()
 
