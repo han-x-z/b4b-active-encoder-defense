@@ -467,7 +467,7 @@ def main_worker(gpu, ngpus_per_node, buckets_covered, args):
         )
         query_loader = torch.utils.data.DataLoader(
                 train_dataset,
-                batch_size=args.batch_size,
+                batch_size=256,
                 shuffle=False,  # (train_sampler is None),
                 num_workers=args.workers,
                 pin_memory=True,
@@ -1077,7 +1077,7 @@ def extract_features(
                 stdev_value = get_stdev(i, buckets_covered, args.lam, args.alpha, args.beta)
                 # 2. 判断是否启用强化攻击
                 if args.enhance_attack == "True":
-                    repeat_times = 16  # 设定重复的次数
+                    repeat_times = 8  # 设定重复的次数
                     # 将特征重复，并计算去噪
                     victim_features = victim_features.repeat(repeat_times, 1)
                     victim_features = (
@@ -1098,7 +1098,7 @@ def extract_features(
             # 将 victim_model 的特征保存到列表中
             victim_features_list.append(victim_features.cpu().numpy())
             # 累加已经处理的查询数量
-            num_q += len(images)
+            num_q += len(images) * 8
 
             if i % args.print_freq == 0:
                 print(f"Processed batch {i}/{len(data_loader)}, Total queries: {num_q}")
@@ -1177,7 +1177,7 @@ def train_clone_model(
     victim_feature_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_{args.num_queries}_batchsize_{args.batch_size}_output_enhance_attack_{args.enhance_attack}.npz"
     # 创建数据集
     victim_feature_dataset = VictimFeatureDataset(victim_feature_path)
-    victim_feature_loader = DataLoader(victim_feature_dataset, batch_size=args.batch_size, shuffle=False)
+    victim_feature_loader = DataLoader(victim_feature_dataset, batch_size=256, shuffle=False)
 
     # 测试加载数据
     for victim_feature in victim_feature_loader:
@@ -1291,7 +1291,7 @@ def train_clone_model(
         batch_time.update(time.time() - end)
         end = time.time()
 
-        num += len(images)  #TODO
+        num += len(images) * 8 #TODO
         if num > args.num_queries:
             break
 
@@ -1363,7 +1363,7 @@ def train(
     #print(f"train_loader.batch_size: {train_loader.batch_size}")
     for i, (images, classes) in enumerate(train_loader):
         # 如果我们想要每个输入重复 2 次，可以这样处理
-        repeat_times = 16  # 你可以根据需要设定重复的次数，例如2次、4次等
+        repeat_times = 8  # 你可以根据需要设定重复的次数，例如2次、4次等
         repeated_images = torch.cat([images] * repeat_times, dim=0)
         repeated_images = repeated_images.cuda()
 
