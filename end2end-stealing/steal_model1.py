@@ -32,7 +32,7 @@ from utils import print_args
 
 from models.resnet_simclr import ResNetSimCLRV2
 from models.simplenet import SimpleNet
-
+from torch.utils.data import Dataset, DataLoader
 best_acc1 = 0
 
 
@@ -335,13 +335,32 @@ def add_common_arguments(parser):
         type=int,
         help="Number of random columns in projection matrix used to compute buckets for embedding.",
     )
-
+    parser.add_argument(
+        "--enhance_attack",
+        default="False",
+        type=str,
+    )
+    parser.add_argument(
+        "--repeat_times",
+        default=1,
+        type=int,
+    )
+    parser.add_argument(
+        "--query_control",
+        default="False",
+        type=str,
+    )
+    parser.add_argument(
+        "--noise_threshold",
+        default=1.0,
+        type=float,
+    )
 
 def main_worker(gpu, ngpus_per_node, buckets_covered, args):
     global best_acc1
     args.gpu = gpu
     log_dir = f"{args.pathpre}/{args.model_to_steal}/"
-    logname = f"stealing_{args.datasetsteal}_{args.num_queries}_{args.losstype}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}.log"
+    logname = f"stealing_{args.datasetsteal}_{args.num_queries}_{args.losstype}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_enhance_attack_{args.enhance_attack}_repeat_times_{args.repeat_times}_query_control_{args.query_control}.log"
     os.makedirs(log_dir, exist_ok=True)
     logging.basicConfig(filename=os.path.join(log_dir, logname), level=logging.DEBUG)
 
@@ -434,13 +453,50 @@ def main_worker(gpu, ngpus_per_node, buckets_covered, args):
         return
 
     victim_model.eval()
+
+    extract_features(
+    query_loader,
+    victim_model,
+    buckets_covered,
+    args,
+    )
+    """
+    if args.datasetsteal == "imagenet":
+        traindir = os.path.join(args.data, "train")
+        valdir = os.path.join(args.data, "val")
+        normalize = transforms.Normalize(
+            mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+        )
+        train_dataset = datasets.ImageFolder(
+            traindir,
+            transforms.Compose(
+                [
+                    transforms.RandomResizedCrop(224),
+                    transforms.RandomHorizontalFlip(),
+                    #transforms.Resize(256),
+                    #transforms.CenterCrop(224),
+                    transforms.ToTensor(),
+                     normalize,
+                ]
+            ),
+        )
+        query_loader = torch.utils.data.DataLoader(
+                train_dataset,
+                batch_size=256,
+                shuffle=False,  # (train_sampler is None),
+                num_workers=args.workers,
+                pin_memory=True,
+                sampler=train_sampler,
+                drop_last=True,
+            )
+        print("Datasets setting already!")
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
         adjust_learning_rate(optimizer, init_lr, epoch, args)
 
         # train for one epoch (stealing)
-        train(
+        train_clone_model(
             query_loader,
             stealing_model,
             victim_model,
@@ -469,7 +525,7 @@ def main_worker(gpu, ngpus_per_node, buckets_covered, args):
                 is_best=True,
                 args=args,
             )
-
+    """
 
 def build_victim_model(args):
     if args.model_to_steal == "dino":
@@ -672,8 +728,10 @@ def load_dataset(args):
                 traindir,
                 transforms.Compose(
                     [
-                        transforms.RandomResizedCrop(224),
-                        transforms.RandomHorizontalFlip(),
+                        #transforms.RandomResizedCrop(224),
+                        #transforms.RandomHorizontalFlip(),
+                        transforms.Resize(256),
+                        transforms.CenterCrop(224),
                         transforms.ToTensor(),
                         normalize,
                     ]
@@ -928,13 +986,14 @@ def save_checkpoint(state, is_best, args):
     if is_best:
         torch.save(
             state,
-            f"{args.pathpre}/{args.model_to_steal}/checkpoint_{args.datasetsteal}_{args.losstype}_{args.num_queries}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}.pth.tar",
+            f"{args.pathpre}/{args.model_to_steal}/checkpoint_{args.datasetsteal}_{args.losstype}_{args.num_queries}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_enhance_attack_{args.enhance_attack}_repeat_times_{args.repeat_times}_query_control_{args.query_control}.pth.tar",
         )
 
 
 def get_stdev(batch_number, buckets_covered, lam, alpha, beta):
-    buckets_256 = np.repeat(buckets_covered, 2)
-    n_buckets = buckets_256[batch_number]
+    #buckets_256 = np.repeat(buckets_covered, 2)
+    #n_buckets = buckets_256[batch_number]
+    n_buckets = buckets_covered[batch_number]
     stdev = lam * (np.exp(np.log(alpha / lam) * n_buckets / beta) - 1)
     return max(stdev, 0)
 
@@ -968,7 +1027,144 @@ def info_nce_loss(features, args):
     return logits, labels
 
 
-def train(
+def repeat_and_average(victim_features, repeat_times):
+    """
+    对重复的特征取平均来减少噪声
+    """
+    # 将 victim_features 切分成 repeat_times 组
+    feature_parts = victim_features.chunk(repeat_times, dim=0)
+    # 对每个组的特征取平均
+    avg_features = sum(feature_parts) / repeat_times
+    return avg_features
+
+
+def save_output(filepath, data):
+    # 保存数据到指定的路径
+    np.savez(filepath, data.cpu().numpy())
+
+def extract_features(
+    data_loader,
+    victim_model,
+    buckets_covered,
+    args,
+):
+    # 定义保存路径
+    victim_features_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_{args.num_queries}_output_enhance_attack_{args.enhance_attack}_repeat_times_{args.repeat_times}_query_control_{args.query_control}.npz"
+
+    # 确保输出文件夹存在
+    os.makedirs(f"{args.prefix}/outputs", exist_ok=True)
+
+    # 检查文件是否已经存在
+    if os.path.exists(victim_features_path):
+        print(f"File {victim_features_path} already exists. Skipping extraction.")
+        return
+
+
+
+    # 选择一个固定的检测样本
+    detection_sample, _ = next(iter(data_loader))
+    detection_sample = detection_sample[0:1]  # 只取第一个样本
+    detection_sample = detection_sample.cuda()
+    # 累积所有批次的特征
+    victim_features_list = []
+
+    # 初始化查询计数器
+    num_q = 0
+    # 设定噪声阈值
+    noise_threshold = args.noise_threshold if hasattr(args, 'noise_threshold') else 0.1  # 你可以在 args 中设定一个阈值
+    with torch.no_grad():  # 不计算梯度，加快推理速度
+        for i, (images, _) in enumerate(data_loader):
+            images = images.cuda()
+            # 在每个 batch 中插入检测样本
+            images_with_detection = torch.cat([images, detection_sample], dim=0)
+            # 计算 victim_model 的特征
+            if args.model_to_steal == "dino" and "vit" in args.archdino:
+                intermediate_output = victim_model.get_intermediate_layers(images_with_detection, args.n_last_blocks)
+                victim_features = torch.cat([x[:, 0] for x in intermediate_output], dim=-1)
+                if args.avgpool_patchtokens:
+                    victim_features = torch.cat(
+                        (
+                            victim_features.unsqueeze(-1),
+                            torch.mean(intermediate_output[-1][:, 1:], dim=1).unsqueeze(-1),
+                        ),
+                        dim=-1,
+                    )
+                    victim_features = victim_features.reshape(victim_features.shape[0], -1)
+            else:
+                victim_features = victim_model(images_with_detection)
+            # 1. 防御机制: 计算方差并添加高斯噪声
+            if args.usedefence == "True":
+                g_cuda = torch.Generator()
+                g_cuda.manual_seed(i)
+                stdev_value = get_stdev(i, buckets_covered, args.lam, args.alpha, args.beta)
+                victim_features = (
+                        victim_features
+                        + torch.normal(
+                            0, stdev_value, size=victim_features.shape, generator=g_cuda
+                        ).cuda()
+                    )
+                detection_feature = victim_features[-1]  # 取最后一个特征，即检测样本的特征
+                     # 判断是否为第一个 batch
+                if first_detection_feature is None:
+                    first_detection_feature = detection_feature.clone()  # 保存第一个检测样本特征
+                # 计算噪声影响的度量
+                if i > 0:  # 从第二个 batch 开始比较
+                    std_value = torch.std(detection_feature - first_detection_feature)
+                    print(f"Batch {i}, Noise STD: {std_value.item()}")
+                    # 2. 判断是否启用强化攻击
+                    # 2. 检测噪声是否超过阈值
+                    if std_value.item() > noise_threshold:
+                        print(f"Noise exceeded threshold at batch {i}, activating enhance_attack for next batch")
+                        args.enhance_attack = "True"  # 动态启用强化攻击
+            # 3. 如果启用强化攻击
+            if args.enhance_attack == "True":
+                print(f"Enhance attack activated for batch {i}")
+                victim_features = victim_features.repeat(args.repeat_times, 1)
+                victim_features = (
+                    victim_features
+                    + torch.normal(0, stdev_value, size=victim_features.shape, generator=g_cuda).cuda()
+                )
+                # 对重复的特征取平均，进行去噪
+                victim_features = repeat_and_average(victim_features, args.repeat_times)
+
+            # 将 victim_model 的特征保存到列表中
+            victim_features_list.append(victim_features[:-1].cpu().numpy())
+            # 累加已经处理的查询数量
+            if args.query_control == "True":
+                num_q += len(images) * args.repeat_times
+            else:
+                num_q += len(images)
+            if i % args.print_freq == 0:
+                print(f"Processed batch {i}/{len(data_loader)}, Total queries: {num_q}")
+
+            # 如果超过预定的查询量，退出循环
+            if num_q >= args.num_queries:
+                print(f"Reached the query limit: {num_q} queries. Stopping extraction.")
+                break
+
+    # 保存 victim model 的特征为 npz 文件
+    np.savez(victim_features_path, np.concatenate(victim_features_list, axis=0))
+    print(f"Victim features saved to {victim_features_path}")
+
+# 自定义 Dataset 类，只使用 victim features
+class VictimFeatureDataset(Dataset):
+    def __init__(self, victim_feature_path):
+        # 加载 victim 的特征
+        victim_data = np.load(victim_feature_path)
+        self.victim_features = victim_data['arr_0']
+
+    def __len__(self):
+        # 返回数据集的大小
+        return len(self.victim_features)
+
+    def __getitem__(self, idx):
+        # 返回特定索引处的 victim 特征
+        victim_feature = torch.tensor(self.victim_features[idx], dtype=torch.float32)
+        return victim_feature
+
+
+
+def train_clone_model(
     train_loader,
     stealing_model,
     victim_model,
@@ -978,6 +1174,7 @@ def train(
     buckets_covered,
     args,
 ):
+
     sybil_params = []
     for sybil_no in range(args.n_sybils - 1):
         mapper = torch.load(
@@ -999,8 +1196,6 @@ def train(
     batch_time = AverageMeter("Time", ":6.3f")
     data_time = AverageMeter("Data", ":6.3f")
     losses = AverageMeter("Loss", ":.4e")
-    # top1 = AverageMeter('Acc@1', ':6.2f')
-    # top5 = AverageMeter('Acc@5', ':6.2f')
     progress = ProgressMeter(
         len(train_loader),
         [batch_time, data_time, losses],  # , top1, top5],
@@ -1010,6 +1205,20 @@ def train(
     end = time.time()
     num = 0
     stealing_model.train()
+    # 加载数据
+    victim_feature_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_{args.num_queries}_output_enhance_attack_{args.enhance_attack}_repeat_times_{args.repeat_times}_query_control_{args.query_control}.npz"
+    # 创建数据集
+    victim_feature_dataset = VictimFeatureDataset(victim_feature_path)
+    victim_feature_loader = DataLoader(victim_feature_dataset, batch_size=256, shuffle=False)
+
+    # 测试加载数据
+    for victim_feature in victim_feature_loader:
+        print("Victim Feature Shape:", victim_feature.shape)
+
+        # 打印第一个 batch 的前几项具体值
+        print("Victim Feature Values (first 5 values of first batch):")
+        print(victim_feature[:5])  # 只输出前 5 个特征值
+        break  # 只输出第一个 batch
 
     size = 224
     s = 1
@@ -1018,19 +1227,19 @@ def train(
     to_pil = transforms.ToPILImage()
     data_transforms = transforms.Compose(
         [
-            transforms.RandomResizedCrop(size=size),
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomApply([color_jitter], p=0.8),
-            transforms.RandomGrayscale(p=0.2),
-            GaussianBlur(kernel_size=int(0.1 * size)),
+            #transforms.RandomResizedCrop(size=size),
+            #transforms.RandomHorizontalFlip(),
+            #transforms.RandomApply([color_jitter], p=0.8),
+            #transforms.RandomGrayscale(p=0.2),
+            #GaussianBlur(kernel_size=int(0.1 * size)),
+
         ]
     )
 
     tloss = 0
 
     # collect=[]
-
-    for i, (images, classes) in enumerate(train_loader):
+    for i, ((images, classes), victim_features) in enumerate(zip(train_loader, victim_feature_loader)):
         if args.n_sybils > 1:
             batches_per_attacker = int(
                 np.ceil((args.num_queries / args.batch_size) // args.n_sybils)
@@ -1057,66 +1266,17 @@ def train(
         if args.gpu is not None:
             images = images.cuda(args.gpu, non_blocking=True)
 
-        # compute output
-        with torch.no_grad():
-            if args.model_to_steal == "dino" and "vit" in args.archdino:
-                intermediate_output = victim_model.get_intermediate_layers(
-                    images, args.n_last_blocks
-                )
-                victim_features = torch.cat(
-                    [x[:, 0] for x in intermediate_output], dim=-1
-                )
-                if args.avgpool_patchtokens:
-                    victim_features = torch.cat(
-                        (
-                            victim_features.unsqueeze(-1),
-                            torch.mean(intermediate_output[-1][:, 1:], dim=1).unsqueeze(
-                                -1
-                            ),
-                        ),
-                        dim=-1,
-                    )
-                    victim_features = victim_features.reshape(
-                        victim_features.shape[0], -1
-                    )
-            else:
-                victim_features = victim_model(images)
-            # collect.append(victim_features.cpu().numpy())
-
-        if args.usedefence == "True":
-            g_cuda = torch.Generator()
-            g_cuda.manual_seed(i)
-            if args.n_sybils > 1:
-                stdev_value = get_stdev(
-                    i % batches_per_attacker,
-                    buckets_covered,
-                    args.lam,
-                    args.alpha,
-                    args.beta,
-                )
-            else:
-                stdev_value = get_stdev(
-                    i, buckets_covered, args.lam, args.alpha, args.beta
-                )
-            # print(i,stdev_value)
-            # print(torch.normal(0,stdev_value,size=victim_features.shape, generator=g_cuda))
-            victim_features = (
-                victim_features
-                + torch.normal(
-                    0, stdev_value, size=victim_features.shape, generator=g_cuda
-                ).cuda()
-            )
-
-#         for sybil_no, sybil in enumerate(sybil_params):
-#             if (sybil_no + 2) * batches_per_attacker > i and i >= (
-#                 sybil_no + 1
-#             ) * batches_per_attacker:
-#                 victim_features = torch.matmul(victim_features, sybil["A"]) + sybil["B"]
-#                 victim_features *= 1000 if args.model_to_steal == "simsiam" else 1
-#                 victim_features = sybil["mapper"](victim_features)
-#                 victim_features /= 1000 if args.model_to_steal == "simsiam" else 1
-
-
+        victim_features = victim_features.cuda()
+        """
+        for sybil_no, sybil in enumerate(sybil_params):
+            if (sybil_no + 2) * batches_per_attacker > i and i >= (
+                sybil_no + 1
+            ) * batches_per_attacker:
+                victim_features = torch.matmul(victim_features, sybil["A"]) + sybil["B"]
+                victim_features *= 1000 if args.model_to_steal == "simsiam" else 1
+                victim_features = sybil["mapper"](victim_features)
+                victim_features /= 1000 if args.model_to_steal == "simsiam" else 1
+        """
         if args.useaug == "True":
             augment_images = []
             for image in images:
@@ -1162,6 +1322,177 @@ def train(
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
+
+        if args.query_control == "True":
+            num += len(images) * args.repeat_times
+        else:
+            num += len(images)
+        if num > args.num_queries:
+            break
+
+        if i % args.print_freq == 0:
+            progress.display(i)
+    logging.debug(f"Epoch: {epoch}. Loss: {tloss / i}")
+
+
+def train(
+    train_loader,
+    stealing_model,
+    victim_model,
+    criterion,
+    optimizer,
+    epoch,
+    buckets_covered,
+    args,
+):
+
+    sybil_params = []
+    for sybil_no in range(args.n_sybils - 1):
+        mapper = torch.load(
+            f"{args.prefix}/resources/mapper/{args.model_to_steal}/mapper_{args.num_queries_mapping}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_no_{sybil_no}"
+        ).cuda()
+        affine_transform = np.load(
+            f"{args.prefix}/resources/transformations/{args.model_to_steal}/affine_transform_{args.num_queries_mapping}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_no_{sybil_no}.npz"
+        )
+        A = torch.Tensor(affine_transform["A"]).cuda()
+        B = torch.Tensor(affine_transform["B"]).cuda()
+
+        sybil_params.append({"mapper": mapper, "A": A, "B": B})
+
+    if args.n_sybils > 1:
+        batches_for_mapping = int(np.ceil(args.num_queries_mapping / args.batch_size))
+
+        print(f"batches_for_mapping {batches_for_mapping}")
+
+    batch_time = AverageMeter("Time", ":6.3f")
+    data_time = AverageMeter("Data", ":6.3f")
+    losses = AverageMeter("Loss", ":.4e")
+    progress = ProgressMeter(
+        len(train_loader),
+        [batch_time, data_time, losses],  # , top1, top5],
+        prefix="Epoch: [{}]".format(epoch),
+    )
+
+    end = time.time()
+    num = 0
+    stealing_model.train()
+
+    size = 224
+    s = 1
+    color_jitter = transforms.ColorJitter(0.8 * s, 0.8 * s, 0.8 * s, 0.2 * s)
+    to_tensor = transforms.ToTensor()
+    to_pil = transforms.ToPILImage()
+    data_transforms = transforms.Compose(
+        [
+            transforms.RandomResizedCrop(size=size),
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomApply([color_jitter], p=0.8),
+            transforms.RandomGrayscale(p=0.2),
+            GaussianBlur(kernel_size=int(0.1 * size)),
+        ]
+    )
+
+    tloss = 0
+
+    # collect=[]
+    #print(f"train_loader.batch_size: {train_loader.batch_size}")
+    for i, (images, classes) in enumerate(train_loader):
+        # 如果我们想要每个输入重复 2 次，可以这样处理
+        repeat_times = 8  # 你可以根据需要设定重复的次数，例如2次、4次等
+        repeated_images = torch.cat([images] * repeat_times, dim=0)
+        repeated_images = repeated_images.cuda()
+
+        # measure data loading time
+        data_time.update(time.time() - end)
+
+        if args.gpu is not None:
+            images = images.cuda(args.gpu, non_blocking=True)
+
+        # Compute output
+        with torch.no_grad():
+            if args.model_to_steal == "dino" and "vit" in args.archdino:
+                intermediate_output = victim_model.get_intermediate_layers(
+                    repeated_images, args.n_last_blocks
+                )
+                victim_features = torch.cat(
+                    [x[:, 0] for x in intermediate_output], dim=-1
+                )
+                if args.avgpool_patchtokens:
+                    victim_features = torch.cat(
+                        (
+                            victim_features.unsqueeze(-1),
+                            torch.mean(intermediate_output[-1][:, 1:], dim=1).unsqueeze(
+                                -1
+                            ),
+                        ),
+                        dim=-1,
+                    )
+                    victim_features = victim_features.reshape(
+                        victim_features.shape[0], -1
+                    )
+            else:
+                victim_features = victim_model(repeated_images)
+        save_output(clean_output_path, victim_features)
+
+
+        # 防御机制: 计算方差并添加高斯噪声
+        if args.usedefence == "True":
+            g_cuda = torch.Generator()
+            g_cuda.manual_seed(i)
+            stdev_value = get_stdev(i, buckets_covered, args.lam, args.alpha, args.beta)
+            print(i,stdev_value,buckets_covered[i]) #TODO
+            victim_features = (
+                victim_features
+                + torch.normal(
+                    0, stdev_value, size=victim_features.shape, generator=g_cuda
+                ).cuda()
+            )
+            save_output(noisy_output_path, victim_features)
+        # 对重复的特征取平均
+        victim_features = repeat_and_average(victim_features, repeat_times)
+
+        if args.useaug == "True":
+            augment_images = []
+            for image in images:
+                aug_image = to_pil(image)
+                aug_image = data_transforms(aug_image)
+                aug_image = to_tensor(aug_image)
+                augment_images.append(aug_image)
+
+            augment_images = torch.stack(augment_images)
+            if args.gpu is not None:
+                augment_images = augment_images.cuda(args.gpu, non_blocking=True)
+            stolen_features = stealing_model(augment_images)
+        else:
+            stolen_features = stealing_model(images)
+
+        if args.losstype == "mse":
+            loss = criterion(stolen_features, victim_features)
+        elif args.losstype == "infonce":
+            all_features = torch.cat([stolen_features, victim_features], dim=0)
+            logits, labels = info_nce_loss(all_features, args)
+            logits = logits.cuda(args.gpu, non_blocking=True)
+            labels = labels.cuda(args.gpu, non_blocking=True)
+            loss = criterion(logits, labels)
+
+        elif args.losstype == "softnn":
+            all_features = torch.cat([stolen_features, victim_features], dim=0)
+            loss = criterion(
+                args, all_features, pairwise_euclid_distance, args.temperaturesn
+            )
+
+        # measure accuracy and record loss
+        losses.update(loss.item(), images.size(0))
+        tloss += loss.item()
+
+        # compute gradient and do SGD step
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
         num += len(images)
         if num > args.num_queries:
             break
@@ -1169,9 +1500,6 @@ def train(
         if i % args.print_freq == 0:
             progress.display(i)
     logging.debug(f"Epoch: {epoch}. Loss: {tloss / i}")
-    # print average over batch
-    # collect=np.vstack(collect)
-    # np.savez("collected-noise-imagenet.npz", np.float32(collect))
 
 
 if __name__ == "__main__":
