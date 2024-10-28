@@ -340,13 +340,22 @@ def add_common_arguments(parser):
         default="False",
         type=str,
     )
-
+    parser.add_argument(
+        "--repeat_times",
+        default=1,
+        type=int,
+    )
+    parser.add_argument(
+        "--query_control",
+        default="False",
+        type=str,
+    )
 
 def main_worker(gpu, ngpus_per_node, buckets_covered, args):
     global best_acc1
     args.gpu = gpu
     log_dir = f"{args.pathpre}/{args.model_to_steal}/"
-    logname = f"stealing_{args.datasetsteal}_{args.num_queries}_{args.losstype}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_enhance_attack_{args.enhance_attack}_useaug_{args.useaug}.log"
+    logname = f"stealing_{args.datasetsteal}_{args.num_queries}_{args.losstype}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_enhance_attack_{args.enhance_attack}_repeat_times_{repeat_times}_query_control_{query_control}.log"
     os.makedirs(log_dir, exist_ok=True)
     logging.basicConfig(filename=os.path.join(log_dir, logname), level=logging.DEBUG)
 
@@ -971,7 +980,7 @@ def save_checkpoint(state, is_best, args):
     if is_best:
         torch.save(
             state,
-            f"{args.pathpre}/{args.model_to_steal}/checkpoint_{args.datasetsteal}_{args.losstype}_{args.num_queries}_batchsize_{args.batch_size}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_enhance_attack_{args.enhance_attack}_useaug_{args.useaug}.pth.tar",
+            f"{args.pathpre}/{args.model_to_steal}/checkpoint_{args.datasetsteal}_{args.losstype}_{args.num_queries}_batchsize_{args.batch_size}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_enhance_attack_{args.enhance_attack}_repeat_times_{repeat_times}_query_control_{query_control}.pth.tar",
         )
 
 
@@ -1034,7 +1043,7 @@ def extract_features(
     args,
 ):
     # 定义保存路径
-    victim_features_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_{args.num_queries}_batchsize_{args.batch_size}_output_enhance_attack_{args.enhance_attack}.npz"
+    victim_features_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_{args.num_queries}_batchsize_{args.batch_size}_output_enhance_attack_{args.enhance_attack}_repeat_times_{repeat_times}_query_control_{query_control}.npz"
 
     # 确保输出文件夹存在
     os.makedirs(f"{args.prefix}/outputs", exist_ok=True)
@@ -1077,9 +1086,8 @@ def extract_features(
                 stdev_value = get_stdev(i, buckets_covered, args.lam, args.alpha, args.beta)
                 # 2. 判断是否启用强化攻击
                 if args.enhance_attack == "True":
-                    repeat_times = 8  # 设定重复的次数
                     # 将特征重复，并计算去噪
-                    victim_features = victim_features.repeat(repeat_times, 1)
+                    victim_features = victim_features.repeat(args.repeat_times, 1)
                     victim_features = (
                         victim_features
                         + torch.normal(
@@ -1087,7 +1095,7 @@ def extract_features(
                         ).cuda()
                     )
                     # 对重复的特征取平均，进行去噪
-                    victim_features = repeat_and_average(victim_features, repeat_times)
+                    victim_features = repeat_and_average(victim_features, args.repeat_times)
                 else:
                     victim_features = (
                         victim_features
@@ -1098,8 +1106,10 @@ def extract_features(
             # 将 victim_model 的特征保存到列表中
             victim_features_list.append(victim_features.cpu().numpy())
             # 累加已经处理的查询数量
-            num_q += len(images) * 8
-
+            if args.query_control == "True":
+                num_q += len(images) * args.repeat_times
+            else:
+                num_q += len(images)
             if i % args.print_freq == 0:
                 print(f"Processed batch {i}/{len(data_loader)}, Total queries: {num_q}")
 
@@ -1174,7 +1184,7 @@ def train_clone_model(
     num = 0
     stealing_model.train()
     # 加载数据
-    victim_feature_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_{args.num_queries}_batchsize_{args.batch_size}_output_enhance_attack_{args.enhance_attack}.npz"
+    victim_feature_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_{args.num_queries}_batchsize_{args.batch_size}_output_enhance_attack_{args.enhance_attack}_repeat_times_{repeat_times}_query_control_{query_control}.npz"
     # 创建数据集
     victim_feature_dataset = VictimFeatureDataset(victim_feature_path)
     victim_feature_loader = DataLoader(victim_feature_dataset, batch_size=256, shuffle=False)
@@ -1291,7 +1301,10 @@ def train_clone_model(
         batch_time.update(time.time() - end)
         end = time.time()
 
-        num += len(images) * 8 #TODO
+        if args.query_control == "True":
+            num += len(images) * args.repeat_times
+        else:
+            num += len(images)
         if num > args.num_queries:
             break
 
