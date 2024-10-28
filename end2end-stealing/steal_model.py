@@ -1043,7 +1043,7 @@ def extract_features(
     args,
 ):
     # 定义保存路径
-    victim_features_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_{args.num_queries}_batchsize_{args.batch_size}_output_enhance_attack_{args.enhance_attack}_repeat_times_{args.repeat_times}_query_control_{args.query_control}.npz"
+    victim_features_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_{args.num_queries}_output_enhance_attack_{args.enhance_attack}_repeat_times_{args.repeat_times}_query_control_{args.query_control}.npz"
 
     # 确保输出文件夹存在
     os.makedirs(f"{args.prefix}/outputs", exist_ok=True)
@@ -1184,7 +1184,7 @@ def train_clone_model(
     num = 0
     stealing_model.train()
     # 加载数据
-    victim_feature_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_{args.num_queries}_batchsize_{args.batch_size}_output_enhance_attack_{args.enhance_attack}_repeat_times_{repeat_times}_query_control_{query_control}.npz"
+    victim_feature_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_{args.num_queries}_output_enhance_attack_{args.enhance_attack}_repeat_times_{args.repeat_times}_query_control_{args.query_control}.npz"
     # 创建数据集
     victim_feature_dataset = VictimFeatureDataset(victim_feature_path)
     victim_feature_loader = DataLoader(victim_feature_dataset, batch_size=256, shuffle=False)
