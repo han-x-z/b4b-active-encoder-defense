@@ -355,7 +355,7 @@ def main_worker(gpu, ngpus_per_node, buckets_covered, args):
     global best_acc1
     args.gpu = gpu
     log_dir = f"{args.pathpre}/{args.model_to_steal}/"
-    logname = f"stealing_{args.datasetsteal}_{args.num_queries}_{args.losstype}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_enhance_attack_{args.enhance_attack}_repeat_times_{repeat_times}_query_control_{query_control}.log"
+    logname = f"stealing_{args.datasetsteal}_{args.num_queries}_{args.losstype}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_enhance_attack_{args.enhance_attack}_repeat_times_{args.repeat_times}_query_control_{args.query_control}.log"
     os.makedirs(log_dir, exist_ok=True)
     logging.basicConfig(filename=os.path.join(log_dir, logname), level=logging.DEBUG)
 
@@ -980,7 +980,7 @@ def save_checkpoint(state, is_best, args):
     if is_best:
         torch.save(
             state,
-            f"{args.pathpre}/{args.model_to_steal}/checkpoint_{args.datasetsteal}_{args.losstype}_{args.num_queries}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_enhance_attack_{args.enhance_attack}_repeat_times_{repeat_times}_query_control_{query_control}.pth.tar",
+            f"{args.pathpre}/{args.model_to_steal}/checkpoint_{args.datasetsteal}_{args.losstype}_{args.num_queries}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_enhance_attack_{args.enhance_attack}_repeat_times_{args.repeat_times}_query_control_{args.query_control}.pth.tar",
         )
 
 
@@ -1043,7 +1043,7 @@ def extract_features(
     args,
 ):
     # 定义保存路径
-    victim_features_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_{args.num_queries}_batchsize_{args.batch_size}_output_enhance_attack_{args.enhance_attack}_repeat_times_{repeat_times}_query_control_{query_control}.npz"
+    victim_features_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_{args.num_queries}_batchsize_{args.batch_size}_output_enhance_attack_{args.enhance_attack}_repeat_times_{args.repeat_times}_query_control_{args.query_control}.npz"
 
     # 确保输出文件夹存在
     os.makedirs(f"{args.prefix}/outputs", exist_ok=True)
