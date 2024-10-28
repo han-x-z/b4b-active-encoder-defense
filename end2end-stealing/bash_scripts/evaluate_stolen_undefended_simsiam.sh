@@ -18,4 +18,6 @@ python evaluate_stolen_model.py simsiam \
 --epochs 50 \
 --gpu 6 \
 --enhance_attack 'False' \
+--repeat_times 1 \
+--query_control 'False' \
 --modeltype "stolen" 

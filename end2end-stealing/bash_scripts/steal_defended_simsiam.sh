@@ -17,4 +17,6 @@ python steal_model.py simsiam  \
 --epochs 150 \
 --gpu 2 \
 --enhance_attack 'False' \
+--repeat_times 1 \
+--query_control 'False' \
 --pretrained ./pretrained_weights/checkpoint_0099.pth.tar

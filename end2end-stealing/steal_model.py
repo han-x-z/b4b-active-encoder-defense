@@ -980,7 +980,7 @@ def save_checkpoint(state, is_best, args):
     if is_best:
         torch.save(
             state,
-            f"{args.pathpre}/{args.model_to_steal}/checkpoint_{args.datasetsteal}_{args.losstype}_{args.num_queries}_batchsize_{args.batch_size}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_enhance_attack_{args.enhance_attack}_repeat_times_{repeat_times}_query_control_{query_control}.pth.tar",
+            f"{args.pathpre}/{args.model_to_steal}/checkpoint_{args.datasetsteal}_{args.losstype}_{args.num_queries}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_enhance_attack_{args.enhance_attack}_repeat_times_{repeat_times}_query_control_{query_control}.pth.tar",
         )
 
 

@@ -303,6 +303,11 @@ def add_common_arguments(parser):
         default="False",
         type=str,
     )
+    parser.add_argument(
+        "--repeat_times",
+        default=1,
+        type=int,
+    )
 
 def compute_buckets_covered(args, proj_count=20):
     buckets_file_path = f"{args.prefix}/resources/coverage/buckets_covered_{args.model_to_steal}_{args.datasetsteal}_{args.batch_size}_enhance_attack_{args.enhance_attack}.npy"
@@ -390,7 +395,7 @@ def compute_buckets_covered(args, proj_count=20):
 
     else:
 
-        combined_batch_size = args.batch_size * 8  # 组合两个batch大小为256
+        combined_batch_size = args.batch_size * args.repeat_times  # 组合两个batch大小为256
         print(f"Original batch size: {args.batch_size}")
         print(f"Repeated batch size: {combined_batch_size}")
 
