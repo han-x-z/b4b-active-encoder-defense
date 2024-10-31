@@ -1,4 +1,4 @@
-python evaluate_stolen_model.py simsiam \
+python evaluate_stolen_model1.py simsiam \
 --dataset cifar10 \
 --lam 0.000001 \
 --alpha 1 \
@@ -17,7 +17,7 @@ python evaluate_stolen_model.py simsiam \
 --useaug 'False' \
 --epochs 100 \
 --gpu 7 \
---enhance_attack 'False' \
---repeat_times 1 \
---query_control 'False' \
+--enhance_attack 'True' \
+--repeat_times 8 \
+--noise_threshold 1e-05 \
 --modeltype "stolen"

@@ -1,4 +1,4 @@
-python steal_model.py simsiam  \
+python steal_model2.py simsiam  \
 --lam 0.000001 \
 --alpha 1 --beta 60 \
 --num_queries 50000 \
@@ -7,7 +7,7 @@ python steal_model.py simsiam  \
 --world-size -1 \
 --rank 0  \
 --data /workspace/b4b-active-encoder-defense/datasets/ImageNet \
---batch-size 256 \
+--batch-size 32 \
 --lr 0.1 \
 --losstype 'infonce' \
 --datasetsteal 'imagenet' \
@@ -15,8 +15,8 @@ python steal_model.py simsiam  \
 --useaug 'False' \
 --temperature 0.25 \
 --epochs 150 \
---gpu 2 \
+--gpu 7 \
 --enhance_attack 'False' \
---repeat_times 1 \
---query_control 'False' \
+--repeat_times 8 \
+--noise_threshold 1e-05 \
 --pretrained ./pretrained_weights/checkpoint_0099.pth.tar
