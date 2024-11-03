@@ -1042,17 +1042,6 @@ def save_output(filepath, data):
     # 保存数据到指定的路径
     np.savez(filepath, data.cpu().numpy())
 
-def calculate_threshold(embedding_norm, std, n):
-    """
-    根据 Hoeffding 不等式计算阈值
-    embedding_norm: embedding 的 norm
-    variance: 噪声的方差
-    alpha: 噪声的标准差
-    n: embedding 的维度
-    """
-    return std * embedding_norm / math.sqrt(n)
-
-
 
 def extract_features(
     data_loader,
@@ -1136,15 +1125,14 @@ def extract_features(
                     # 计算噪声影响的度量
                     if i > 0:  # 从第二个 batch 开始比较
                         difference = detection_feature - first_detection_feature
+
                         norm_diff = torch.norm(difference)
+                        norm_last = torch.norm(detection_feature)
+                        R = norm_diff / norm_last
                         std_value = torch.std(difference)
                         print(f"Batch {i}, Noise STD: {std_value.item()}")
-                        # 利用 Hoeffding 不等式计算阈值
-                        calculated_threshold = calculate_threshold(norm_diff, std_value, 2048)
-                        #print(f"Batch {i}, calculated_threshold: {calculated_threshold}")
-                        # 2. 判断是否启用强化攻击
-                        # 2. 检测噪声是否超过阈值
-                        if std_value.item() > 1:
+                        print(f"Batch {i}, Noise Norm: {norm_diff.item()}, Embedding Noisy Norm: {norm_last.item()}, R: {R.item()}")
+                        if std_value.item() > args.noise_threshold:
                             print(f"Noise exceeded threshold at batch {i}, activating enhance_attack for next batch")
                             enhance_attack_activated = True
 
@@ -1341,6 +1329,8 @@ def train_clone_model(
         # acc1, acc5 = accuracy(output, target, topk=(1, 5))
         losses.update(loss.item(), images.size(0))
         tloss += loss.item()
+
+
         # top1.update(acc1[0], images.size(0))
         # top5.update(acc5[0], images.size(0))
 
@@ -1361,6 +1351,7 @@ def train_clone_model(
 
         if i % args.print_freq == 0:
             progress.display(i)
+
     logging.debug(f"Epoch: {epoch}. Loss: {tloss / i}")
 
 

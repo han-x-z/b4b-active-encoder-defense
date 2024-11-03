@@ -1123,7 +1123,11 @@ def extract_features(
                     # 计算噪声影响的度量
                     if i > 0:  # 从第二个 batch 开始比较
                         std_value = torch.std(detection_feature - first_detection_feature)
+                        norm_diff = torch.norm(detection_feature - first_detection_feature)
+                        norm_last = torch.norm(detection_feature)
+                        R = norm_diff / norm_last
                         print(f"Batch {i}, Noise STD: {std_value.item()}")
+                        print(f"Batch {i}, Noise Norm: {norm_diff.item()}, Embedding Noisy Norm: {norm_last.item()}, R: {R.item()}")
                         # 2. 判断是否启用强化攻击
                         # 2. 检测噪声是否超过阈值
                         if std_value.item() > noise_threshold:
