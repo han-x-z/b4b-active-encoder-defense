@@ -352,8 +352,8 @@ def add_common_arguments(parser):
         type=str,
     )
     parser.add_argument(
-        "--noise_threshold",
-        default=1.0,
+        "--p_threshold",
+        default=0.05,
         type=float,
     )
 
@@ -361,7 +361,7 @@ def main_worker(gpu, ngpus_per_node, buckets_covered, args):
     global best_acc1
     args.gpu = gpu
     log_dir = f"{args.pathpre}/{args.model_to_steal}/"
-    logname = f"stealing_{args.datasetsteal}_{args.num_queries}_{args.losstype}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_repeat_times_{args.repeat_times}_noise_threshold_{args.noise_threshold}.log"
+    logname = f"stealing_{args.datasetsteal}_{args.num_queries}_{args.losstype}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_repeat_times_{args.repeat_times}_p_threshold_{args.p_threshold}.log"
     os.makedirs(log_dir, exist_ok=True)
     logging.basicConfig(filename=os.path.join(log_dir, logname), level=logging.DEBUG)
 
@@ -987,7 +987,7 @@ def save_checkpoint(state, is_best, args):
     if is_best:
         torch.save(
             state,
-            f"{args.pathpre}/{args.model_to_steal}/checkpoint_{args.datasetsteal}_{args.losstype}_{args.num_queries}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_repeat_times_{args.repeat_times}_noise_threshold_{args.noise_threshold}.pth.tar",
+            f"{args.pathpre}/{args.model_to_steal}/checkpoint_{args.datasetsteal}_{args.losstype}_{args.num_queries}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_repeat_times_{args.repeat_times}_p_threshold_{args.p_threshold}.pth.tar",
         )
 
 
@@ -1064,7 +1064,7 @@ def extract_features(
     args,
 ):
     # 定义保存路径
-    victim_features_path = f"{args.prefix}/output/victim_features_usedefence_{args.usedefence}_{args.num_queries}_output_repeat_times_{args.repeat_times}_noise_threshold_{args.noise_threshold}.npz"
+    victim_features_path = f"{args.prefix}/output/victim_features_usedefence_{args.usedefence}_{args.num_queries}_output_repeat_times_{args.repeat_times}_p_threshold_{args.p_threshold}.npz"
 
     # 确保输出文件夹存在
     os.makedirs(f"{args.prefix}/output", exist_ok=True)
@@ -1145,7 +1145,7 @@ def extract_features(
                         std_value = torch.std(difference)
                         # 初始化：设定噪声 L2 norm 阈值 tau 和概率触发阈值 p_threshold
                         tau = 0.19 * norm_last
-                        p_threshold = 0.3  # 根据需要设定
+                        p_threshold = args.p_threshold  # 根据需要设定
                         m = 2048  # 噪声向量的维度
                         # 第一次计算方差阈值并存储
                         sigma_threshold = calculate_std_threshold(tau, p_threshold, m)
@@ -1238,7 +1238,7 @@ def train_clone_model(
     num = 0
     stealing_model.train()
     # 加载数据
-    victim_feature_path = f"{args.prefix}/output/victim_features_usedefence_{args.usedefence}_{args.num_queries}_output_repeat_times_{args.repeat_times}_noise_threshold_{args.noise_threshold}.npz"
+    victim_feature_path = f"{args.prefix}/output/victim_features_usedefence_{args.usedefence}_{args.num_queries}_output_repeat_times_{args.repeat_times}_p_threshold_{args.p_threshold}.npz"
     # 创建数据集
     victim_feature_dataset = VictimFeatureDataset(victim_feature_path)
     victim_feature_loader = DataLoader(victim_feature_dataset, batch_size=256, shuffle=False)
