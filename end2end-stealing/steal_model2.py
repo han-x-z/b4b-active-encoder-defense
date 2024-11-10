@@ -11,6 +11,7 @@ from collections import defaultdict
 
 import numpy as np
 import torch
+from scipy.stats import chi2
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -1043,6 +1044,19 @@ def save_output(filepath, data):
     np.savez(filepath, data.cpu().numpy())
 
 
+
+
+
+
+# 计算标准差阈值公式
+def calculate_std_threshold(tau, p_threshold, m):
+    chi_square_value = chi2.ppf(1 - p_threshold, df=m)
+    #print("chi_square_value:",chi_square_value)
+    return tau / (chi_square_value )
+
+
+
+
 def extract_features(
     data_loader,
     victim_model,
@@ -1060,8 +1074,6 @@ def extract_features(
         print(f"File {victim_features_path} already exists. Skipping extraction.")
         return
 
-
-
     # 选择一个固定的检测样本
     detection_sample, _ = next(iter(data_loader))
     detection_sample = detection_sample[0:1]  # 只取第一个样本
@@ -1073,8 +1085,9 @@ def extract_features(
     # 初始化查询计数器
     num_q = 0
     num = 0
+
     # 设定噪声阈值
-    noise_threshold = args.noise_threshold if hasattr(args, 'noise_threshold') else 0.1  # 你可以在 args 中设定一个阈值
+    #noise_threshold = args.noise_threshold if hasattr(args, 'noise_threshold') else 0.1  # 你可以在 args 中设定一个阈值
     with torch.no_grad():  # 不计算梯度，加快推理速度
         for i, (images, _) in enumerate(data_loader):
             images = images.cuda()
@@ -1130,9 +1143,16 @@ def extract_features(
                         norm_last = torch.norm(detection_feature)
                         R = norm_diff / norm_last
                         std_value = torch.std(difference)
+                        # 初始化：设定噪声 L2 norm 阈值 tau 和概率触发阈值 p_threshold
+                        tau = 0.19 * norm_last
+                        p_threshold = 0.3  # 根据需要设定
+                        m = 2048  # 噪声向量的维度
+                        # 第一次计算方差阈值并存储
+                        sigma_threshold = calculate_std_threshold(tau, p_threshold, m)
+                        print("标准差阈值 sigma_threshold:", sigma_threshold)
                         print(f"Batch {i}, Noise STD: {std_value.item()}")
                         print(f"Batch {i}, Noise Norm: {norm_diff.item()}, Embedding Noisy Norm: {norm_last.item()}, R: {R.item()}")
-                        if std_value.item() > args.noise_threshold:
+                        if std_value.item() > sigma_threshold:
                             print(f"Noise exceeded threshold at batch {i}, activating enhance_attack for next batch")
                             enhance_attack_activated = True
 
