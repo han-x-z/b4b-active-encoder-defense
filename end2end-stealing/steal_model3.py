@@ -34,6 +34,7 @@ from utils import print_args
 from models.resnet_simclr import ResNetSimCLRV2
 from models.simplenet import SimpleNet
 from torch.utils.data import Dataset, DataLoader
+import matplotlib.pyplot as plt
 best_acc1 = 0
 
 
@@ -361,7 +362,7 @@ def main_worker(gpu, ngpus_per_node, buckets_covered, args):
     global best_acc1
     args.gpu = gpu
     log_dir = f"{args.pathpre}/{args.model_to_steal}/"
-    logname = f"stealing_{args.datasetsteal}_{args.num_queries}_{args.losstype}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_repeat_times_{args.repeat_times}_p_threshold_{args.p_threshold}.log"
+    logname = f"stealing_{args.datasetsteal}_{args.num_queries}_{args.losstype}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_p_threshold_{args.p_threshold}.log"
     os.makedirs(log_dir, exist_ok=True)
     logging.basicConfig(filename=os.path.join(log_dir, logname), level=logging.DEBUG)
 
@@ -987,7 +988,7 @@ def save_checkpoint(state, is_best, args):
     if is_best:
         torch.save(
             state,
-            f"{args.pathpre}/{args.model_to_steal}/checkpoint_{args.datasetsteal}_{args.losstype}_{args.num_queries}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_repeat_times_{args.repeat_times}_p_threshold_{args.p_threshold}.pth.tar",
+            f"{args.pathpre}/{args.model_to_steal}/checkpoint_{args.datasetsteal}_{args.losstype}_{args.num_queries}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_p_threshold_{args.p_threshold}.pth.tar",
         )
 
 
@@ -1064,7 +1065,7 @@ def extract_features(
     args,
 ):
     # 定义保存路径
-    victim_features_path = f"{args.prefix}/output/victim_features_usedefence_{args.usedefence}_{args.num_queries}_output_repeat_times_{args.repeat_times}_p_threshold_{args.p_threshold}.npz"
+    victim_features_path = f"{args.prefix}/output/victim_features_usedefence_{args.usedefence}_{args.num_queries}_p_threshold_{args.p_threshold}.npz"
 
     # 确保输出文件夹存在
     os.makedirs(f"{args.prefix}/output", exist_ok=True)
@@ -1085,8 +1086,13 @@ def extract_features(
     # 初始化查询计数器
     num_q = 0
     num = 0
-
+    count = 0
+    R_values = []
+    query_counts = []
     # 设定噪声阈值
+    enhance_attack_activated = False
+    repeat_fixed = False
+
     #noise_threshold = args.noise_threshold if hasattr(args, 'noise_threshold') else 0.1  # 你可以在 args 中设定一个阈值
     with torch.no_grad():  # 不计算梯度，加快推理速度
         for i, (images, _) in enumerate(data_loader):
@@ -1108,62 +1114,62 @@ def extract_features(
                     victim_features = victim_features.reshape(victim_features.shape[0], -1)
             else:
                 victim_features = victim_model(images_with_detection)
-            # 1. 防御机制: 计算方差并添加高斯噪声
             if args.usedefence == "True":
                 g_cuda = torch.Generator()
                 g_cuda.manual_seed(i)
                 stdev_value = get_stdev(i, buckets_covered, args.lam, args.alpha, args.beta)
                 print(f"Batch {i}, stdev_value: {stdev_value}")
-                # 检查是否启用增强攻击模式
-                if enhance_attack_activated :
-                    print(f"Enhance attack activated for batch {i}")
+                if enhance_attack_activated:
+                    # 根据 R 值动态调整降噪重复次数
+                    # 执行降噪策略
                     victim_features = victim_features.repeat(args.repeat_times, 1)
                     victim_features = (
                         victim_features
                         + torch.normal(0, stdev_value, size=victim_features.shape, generator=g_cuda).cuda()
                     )
-                    # 对重复的特征取平均，进行去噪
                     victim_features = repeat_and_average(victim_features, args.repeat_times)
+                    #enhance_attack_activated = False
+                    num_q += len(images) * args.repeat_times
+                    print(f"Batch {i}, enhance_attack, repeat_times {args.repeat_times}")
+
                 else:
                     victim_features = (
-                            victim_features
-                            + torch.normal(
-                                0, stdev_value, size=victim_features.shape, generator=g_cuda
-                            ).cuda()
-                        )
-                    detection_feature = victim_features[-1]  # 取最后一个特征，即检测样本的特征
-                         # 判断是否为第一个 batch
-                    if first_detection_feature is None:
-                        first_detection_feature = detection_feature.clone()  # 保存第一个检测样本特征
-                    # 计算噪声影响的度量
-                    if i > 0:  # 从第二个 batch 开始比较
-                        difference = detection_feature - first_detection_feature
+                        victim_features
+                        + torch.normal(0, stdev_value, size=victim_features.shape, generator=g_cuda).cuda()
+                    )
+                    num_q += len(images)
+                detection_feature = victim_features[-1]  # 取最后一个特征，即检测样本的特征
+                     # 判断是否为第一个 batch
+                if first_detection_feature is None:
+                    first_detection_feature = detection_feature.clone()  # 保存第一个检测样本特征
+                # 计算噪声影响的度量
+                if i > 0:  # 从第二个 batch 开始比较
+                    difference = detection_feature - first_detection_feature
 
-                        norm_diff = torch.norm(difference)
-                        norm_last = torch.norm(detection_feature)
-                        R = norm_diff / norm_last
-                        std_value = torch.std(difference)
-                        # 初始化：设定噪声 L2 norm 阈值 tau 和概率触发阈值 p_threshold
-                        tau = 0.0019 * norm_last
-                        p_threshold = args.p_threshold  # 根据需要设定
-                        m = 2048  # 噪声向量的维度
-                        # 第一次计算方差阈值并存储
-                        sigma_threshold = calculate_std_threshold(tau, p_threshold, m)
-                        print("标准差阈值 sigma_threshold:", sigma_threshold)
-                        print(f"Batch {i}, Noise STD: {std_value.item()}")
-                        print(f"Batch {i}, Noise Norm: {norm_diff.item()}, Embedding Noisy Norm: {norm_last.item()}, R: {R.item()}")
-                        if std_value.item() > sigma_threshold:
-                            print(f"Noise exceeded threshold at batch {i}, activating enhance_attack for next batch")
-                            enhance_attack_activated = True
+                    norm_diff = torch.norm(difference)
+                    norm_last = torch.norm(detection_feature)
+                    R = norm_diff / norm_last
+                    std_value = torch.std(difference)
+                    # 将 R 值和查询量保存到列表中
+                    R_values.append(R.item())
+                    query_counts.append(num + len(images))
+                    print(f"Batch {i}, Noise STD: {std_value.item()}")
+                    print(f"Batch {i}, Noise Norm: {norm_diff.item()}, Embedding Noisy Norm: {norm_last.item()}, R: {R.item()}")
+
+                    # 如果 R 超过 0.0038，并且未固定 repeat_times，则将其设置为 16 并固定
+                    if R > 0.0075 and not repeat_fixed:
+                        enhance_attack_activated = True
+                        args.repeat_times = 16
+                        repeat_fixed = True  # 固定 repeat_times 为 16，不再更改
+                    elif R > 0.0019 and not repeat_fixed:
+                        enhance_attack_activated = True
+                        args.repeat_times = 8
 
 
             # 将 victim_model 的特征保存到列表中
             victim_features_list.append(victim_features[:-1].cpu().numpy())
             # 累加已经处理的查询数量
-            if enhance_attack_activated:
-                num_q += len(images) * args.repeat_times
-            else:
-                num_q += len(images)
+
             num += len(images)
             if i % args.print_freq == 0:
                 print(f"Processed batch {i}/{len(data_loader)}, Total queries: {num_q}")
@@ -1172,6 +1178,20 @@ def extract_features(
             if num_q >= args.num_queries:
                 print(f"Reached the query limit: {num_q} queries. Stopping extraction.")
                 break
+    np.savez(f"{args.prefix}/output1/R_values_vs_queries_{args.num_queries}_{args.p_threshold}.npz",
+         query_counts=query_counts,
+         R_values=R_values)
+    # 绘制查询量与R值的关系图
+    # Plotting code
+    plt.figure(figsize=(10, 6))
+    plt.plot(query_counts, R_values, label="R value")
+    plt.xlabel("Number of Queries")
+    plt.ylabel("R value")
+    plt.title("Relationship Between Number of Queries and Noise Impact (R value)")
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(f"{args.prefix}/output1/R_values_vs_queries_{args.num_queries}_{args.p_threshold}.png")
+    plt.show()
 
     # 保存 victim model 的特征为 npz 文件
     print(f" Total queries images: {num}")
@@ -1238,7 +1258,7 @@ def train_clone_model(
     num = 0
     stealing_model.train()
     # 加载数据
-    victim_feature_path = f"{args.prefix}/output/victim_features_usedefence_{args.usedefence}_{args.num_queries}_output_repeat_times_{args.repeat_times}_p_threshold_{args.p_threshold}.npz"
+    victim_feature_path = f"{args.prefix}/output/victim_features_usedefence_{args.usedefence}_{args.num_queries}_p_threshold_{args.p_threshold}.npz"
     # 创建数据集
     victim_feature_dataset = VictimFeatureDataset(victim_feature_path)
     victim_feature_loader = DataLoader(victim_feature_dataset, batch_size=256, shuffle=False)
@@ -1305,16 +1325,6 @@ def train_clone_model(
             images = images.cuda(args.gpu, non_blocking=True)
 
         victim_features = victim_features.cuda()
-        """
-        for sybil_no, sybil in enumerate(sybil_params):
-            if (sybil_no + 2) * batches_per_attacker > i and i >= (
-                sybil_no + 1
-            ) * batches_per_attacker:
-                victim_features = torch.matmul(victim_features, sybil["A"]) + sybil["B"]
-                victim_features *= 1000 if args.model_to_steal == "simsiam" else 1
-                victim_features = sybil["mapper"](victim_features)
-                victim_features /= 1000 if args.model_to_steal == "simsiam" else 1
-        """
         if args.useaug == "True":
             augment_images = []
             for image in images:
