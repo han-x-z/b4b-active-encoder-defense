@@ -8,7 +8,7 @@ import sys
 import time
 import warnings
 from collections import defaultdict
-
+from tqdm import tqdm
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
@@ -29,10 +29,11 @@ from loss import pairwise_euclid_distance
 from loss import soft_nn_loss as soft_nn_loss_imagenet
 from torch import nn
 from utils import print_args
-
+from src.transforms.binary import BinaryTransform
 from models.resnet_simclr import ResNetSimCLRV2
 from models.simplenet import SimpleNet
-from torch.utils.data import Dataset, DataLoader
+import json
+import matplotlib.pyplot as plt
 best_acc1 = 0
 
 
@@ -76,8 +77,8 @@ def main():
         buckets_covered = compute_buckets_covered(args)
     else:
         buckets_covered = None
-    if args.n_sybils>1:
-        train_mappers(args)
+    #if args.n_sybils>1:
+        #train_mappers(args)
 
     ngpus_per_node = torch.cuda.device_count()
     print("# gpus", ngpus_per_node)
@@ -118,7 +119,7 @@ def add_dino_arguments(parser_dino):
         "--avgpool_patchtokens",
         default=False,
         type=utils_dino.bool_flag,
-        help="""Whether ot not to concatenate the global average pooled features to the [CLS] token.	
+        help="""Whether ot not to concatenate the global average pooled features to the [CLS] token.
             We typically set this to False for ViT-Small and to True with ViT-Base.""",
     )
     parser_dino.add_argument(
@@ -336,26 +337,17 @@ def add_common_arguments(parser):
         help="Number of random columns in projection matrix used to compute buckets for embedding.",
     )
     parser.add_argument(
-        "--enhance_attack",
-        default="False",
-        type=str,
+        "--transform",
+        default= "binary",
+        type = str,
     )
-    parser.add_argument(
-        "--repeat_times",
-        default=1,
-        type=int,
-    )
-    parser.add_argument(
-        "--query_control",
-        default="False",
-        type=str,
-    )
+
 
 def main_worker(gpu, ngpus_per_node, buckets_covered, args):
     global best_acc1
     args.gpu = gpu
     log_dir = f"{args.pathpre}/{args.model_to_steal}/"
-    logname = f"stealing_{args.datasetsteal}_{args.num_queries}_{args.losstype}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_enhance_attack_{args.enhance_attack}_repeat_times_{args.repeat_times}_query_control_{args.query_control}.log"
+    logname = f"stealing_{args.datasetsteal}_{args.num_queries}_{args.losstype}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}.log"
     os.makedirs(log_dir, exist_ok=True)
     logging.basicConfig(filename=os.path.join(log_dir, logname), level=logging.DEBUG)
 
@@ -448,49 +440,13 @@ def main_worker(gpu, ngpus_per_node, buckets_covered, args):
         return
 
     victim_model.eval()
-
-    extract_features(
-    query_loader,
-    victim_model,
-    buckets_covered,
-    args,
-    )
-    if args.datasetsteal == "imagenet":
-        traindir = os.path.join(args.data, "train")
-        valdir = os.path.join(args.data, "val")
-        normalize = transforms.Normalize(
-            mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-        )
-        train_dataset = datasets.ImageFolder(
-            traindir,
-            transforms.Compose(
-                [
-                    transforms.RandomResizedCrop(224),
-                    transforms.RandomHorizontalFlip(),
-                    #transforms.Resize(256),
-                    #transforms.CenterCrop(224),
-                    transforms.ToTensor(),
-                     normalize,
-                ]
-            ),
-        )
-        query_loader = torch.utils.data.DataLoader(
-                train_dataset,
-                batch_size=256,
-                shuffle=False,  # (train_sampler is None),
-                num_workers=args.workers,
-                pin_memory=True,
-                sampler=train_sampler,
-                drop_last=True,
-            )
-        print("Datasets setting already!")
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
         adjust_learning_rate(optimizer, init_lr, epoch, args)
 
         # train for one epoch (stealing)
-        train_clone_model(
+        train(
             query_loader,
             stealing_model,
             victim_model,
@@ -563,10 +519,24 @@ def build_victim_model(args):
         return victim_model
 
 
+
 def build_stealing_model(args):
     stealing_model = ResNetSimCLRV2(
         base_model=args.arch, out_dim=512, loss=args.losstype, include_mlp=False
     )
+
+    stealing_model.backbone.avgpool = nn.Sequential(
+            nn.Conv2d(2048, 4096, kernel_size=(1, 1), stride=(1, 1), bias=False),
+            nn.AdaptiveAvgPool2d(output_size=(1, 1)),
+        )
+    stealing_model.backbone.fc[0] = nn.Linear(
+        in_features=4096, out_features=4096, bias=True
+    )
+    stealing_model.backbone.fc[2] = nn.Linear(
+        in_features=4096, out_features=512, bias=True
+    )
+    #print(stealing_model)
+
     if args.model_to_steal == "dino":
         stealing_model.backbone.avgpool = nn.Sequential(
             nn.Conv2d(2048, 1536, kernel_size=(1, 1), stride=(1, 1), bias=False),
@@ -722,10 +692,8 @@ def load_dataset(args):
                 traindir,
                 transforms.Compose(
                     [
-                        #transforms.RandomResizedCrop(224),
-                        #transforms.RandomHorizontalFlip(),
-                        transforms.Resize(256),
-                        transforms.CenterCrop(224),
+                        transforms.RandomResizedCrop(224),
+                        transforms.RandomHorizontalFlip(),
                         transforms.ToTensor(),
                         normalize,
                     ]
@@ -980,7 +948,7 @@ def save_checkpoint(state, is_best, args):
     if is_best:
         torch.save(
             state,
-            f"{args.pathpre}/{args.model_to_steal}/checkpoint_{args.datasetsteal}_{args.losstype}_{args.num_queries}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_enhance_attack_{args.enhance_attack}_repeat_times_{args.repeat_times}_query_control_{args.query_control}.pth.tar",
+            f"{args.pathpre}/{args.model_to_steal}/checkpoint_{args.datasetsteal}_{args.losstype}_{args.num_queries}_defence_{args.usedefence}_sybil_{args.n_sybils}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}.pth.tar",
         )
 
 
@@ -1021,128 +989,139 @@ def info_nce_loss(features, args):
     return logits, labels
 
 
-def repeat_and_average(victim_features, repeat_times):
+def get_transformed_embeddings(embeddings, transform):
+    transformed_embeddings = []
+    for embedding in embeddings:
+        transformed_embedding = transform(embedding)
+        transformed_embeddings.append(transformed_embedding)
+    return torch.stack(transformed_embeddings, dim=0)
+
+def compute_flip_matrix(userA_embeddings, userB_embeddings):
     """
-    对重复的特征取平均来减少噪声
+    计算两个用户的二值化输出之间的反转矩阵 Δ。
     """
-    # 将 victim_features 切分成 repeat_times 组
-    feature_parts = victim_features.chunk(repeat_times, dim=0)
-    # 对每个组的特征取平均
-    avg_features = sum(feature_parts) / repeat_times
-    return avg_features
+    assert userA_embeddings.shape == userB_embeddings.shape, "Embeddings dimensions must match"
+
+    # 使用 XOR 操作计算反转矩阵 Δ
+    flip_matrix = (userA_embeddings != userB_embeddings).float()
+    print("flip_matrix.shape:",flip_matrix.shape)
+    return flip_matrix
+
+def compute_flip_probabilities(flip_matrix):
+    """
+    根据反转矩阵计算每个特征维度的反转概率 P(j)
+    """
+    num_samples = flip_matrix.shape[0]  # 样本总数
+    print("num_samples:",num_samples)
+    flip_probabilities = flip_matrix.sum(dim=0) / num_samples  # 每个维度的翻转概率
+
+    return flip_probabilities
+
+def classify_flip_probabilities(flip_probabilities, threshold_low=0.1, threshold_high=0.9, threshold_mid=0.5, tolerance=0.1):
+    """
+    对翻转概率进行分类：接近0、接近1、接近0.5
+    """
+    close_to_0 = []
+    close_to_1 = []
+    close_to_05 = []
+
+    for idx, prob in enumerate(flip_probabilities):
+        if prob <= threshold_low:
+            close_to_0.append(idx)
+        elif prob >= threshold_high:
+            close_to_1.append(idx)
+        elif abs(prob - threshold_mid) <= tolerance:
+            close_to_05.append(idx)
+
+    return close_to_0, close_to_1, close_to_05
 
 
-def save_output(filepath, data):
-    # 保存数据到指定的路径
-    np.savez(filepath, data.cpu().numpy())
+def compute_flip_stats(flip_probabilities):
+    """
+    计算翻转概率的统计信息，统计接近 0, 0.5, 1 的特征位数量。
+    """
+    # 设置各个阈值
+    threshold_low = 0.1
+    threshold_high = 0.9
+    threshold_mid = 0.5
+    tolerance = 0.1  # 判断接近0.5的容差
 
-def extract_features(
-    data_loader,
-    victim_model,
-    buckets_covered,
-    args,
-):
-    # 定义保存路径
-    victim_features_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_{args.num_queries}_output_enhance_attack_{args.enhance_attack}_repeat_times_{args.repeat_times}_query_control_{args.query_control}.npz"
+    # 分类
+    close_to_0, close_to_1, close_to_05 = classify_flip_probabilities(flip_probabilities, threshold_low, threshold_high, threshold_mid, tolerance)
 
-    # 确保输出文件夹存在
-    os.makedirs(f"{args.prefix}/outputs", exist_ok=True)
+    # 计算各个类别占比
+    total_features = len(flip_probabilities)
+    close_to_0_percentage = len(close_to_0) / total_features * 100
+    close_to_1_percentage = len(close_to_1) / total_features * 100
+    close_to_05_percentage = len(close_to_05) / total_features * 100
 
-    # 检查文件是否已经存在
-    if os.path.exists(victim_features_path):
-        print(f"File {victim_features_path} already exists. Skipping extraction.")
-        return
-
-    # 累积所有批次的特征
-    victim_features_list = []
-
-    # 初始化查询计数器
-    num_q = 0
-
-    with torch.no_grad():  # 不计算梯度，加快推理速度
-        for i, (images, _) in enumerate(data_loader):
-            images = images.cuda()
-
-            # 计算 victim_model 的特征
-            if args.model_to_steal == "dino" and "vit" in args.archdino:
-                intermediate_output = victim_model.get_intermediate_layers(images, args.n_last_blocks)
-                victim_features = torch.cat([x[:, 0] for x in intermediate_output], dim=-1)
-                if args.avgpool_patchtokens:
-                    victim_features = torch.cat(
-                        (
-                            victim_features.unsqueeze(-1),
-                            torch.mean(intermediate_output[-1][:, 1:], dim=1).unsqueeze(-1),
-                        ),
-                        dim=-1,
-                    )
-                    victim_features = victim_features.reshape(victim_features.shape[0], -1)
-            else:
-                victim_features = victim_model(images)
-
-            # 1. 防御机制: 计算方差并添加高斯噪声
-            if args.usedefence == "True":
-                g_cuda = torch.Generator()
-                g_cuda.manual_seed(i)
-                stdev_value = get_stdev(i, buckets_covered, args.lam, args.alpha, args.beta)
-                # 2. 判断是否启用强化攻击
-                if args.enhance_attack == "True":
-                    # 将特征重复，并计算去噪
-                    victim_features = victim_features.repeat(args.repeat_times, 1)
-                    victim_features = (
-                        victim_features
-                        + torch.normal(
-                            0, stdev_value, size=victim_features.shape, generator=g_cuda
-                        ).cuda()
-                    )
-                    # 对重复的特征取平均，进行去噪
-                    victim_features = repeat_and_average(victim_features, args.repeat_times)
-                else:
-                    victim_features = (
-                        victim_features
-                        + torch.normal(
-                            0, stdev_value, size=victim_features.shape, generator=g_cuda
-                        ).cuda()
-                    )
-            # 将 victim_model 的特征保存到列表中
-            victim_features_list.append(victim_features.cpu().numpy())
-            # 累加已经处理的查询数量
-            if args.query_control == "True":
-                num_q += len(images) * args.repeat_times
-            else:
-                num_q += len(images)
-            if i % args.print_freq == 0:
-                print(f"Processed batch {i}/{len(data_loader)}, Total queries: {num_q}")
-
-            # 如果超过预定的查询量，退出循环
-            if num_q >= args.num_queries:
-                print(f"Reached the query limit: {num_q} queries. Stopping extraction.")
-                break
-
-    # 保存 victim model 的特征为 npz 文件
-    np.savez(victim_features_path, np.concatenate(victim_features_list, axis=0))
-    print(f"Victim features saved to {victim_features_path}")
+    return close_to_0_percentage, close_to_1_percentage, close_to_05_percentage
 
 
-# 自定义 Dataset 类，只使用 victim features
-class VictimFeatureDataset(Dataset):
-    def __init__(self, victim_feature_path):
-        # 加载 victim 的特征
-        victim_data = np.load(victim_feature_path)
-        self.victim_features = victim_data['arr_0']
+def visualize_flip_probabilities(flip_probabilities, output_path):
+    """
+    可视化特征维度的翻转概率分布。
+    """
+    flip_probabilities = flip_probabilities.cpu().numpy()
+    plt.figure(figsize=(10, 6))
+    plt.bar(range(len(flip_probabilities)), flip_probabilities, alpha=0.7, color='blue')
+    plt.xlabel("Feature Dimension")
+    plt.ylabel("Flip Probability")
+    plt.title("Flip Probability Distribution Across Feature Dimensions")
+    plt.grid(True)
+    plt.savefig(output_path)
+    plt.show()
 
-    def __len__(self):
-        # 返回数据集的大小
-        return len(self.victim_features)
+def analyze_flip_probabilities(userA_embeddings, userB_embeddings, output_path):
+    """
+    统计和可视化二值化输出的翻转概率。
+    """
+    # Step 1: 计算反转矩阵
+    flip_matrix = compute_flip_matrix(userA_embeddings, userB_embeddings)
 
-    def __getitem__(self, idx):
-        # 返回特定索引处的 victim 特征
-        victim_feature = torch.tensor(self.victim_features[idx], dtype=torch.float32)
-        return victim_feature
+    # Step 2: 统计翻转概率
+    flip_probabilities = compute_flip_probabilities(flip_matrix)
 
+    # Step 3: 保存翻转概率统计表
+    flip_stats = {
+        "dimension": list(range(len(flip_probabilities))),
+        "flip_probability": flip_probabilities.tolist(),
+    }
 
+    with open(output_path + "/flip_probabilities.json", "w") as f:
+        json.dump(flip_stats, f)
+    print(f"Flip probabilities saved to {output_path}/flip_probabilities.json")
 
+    # Step 4: 可视化翻转概率
+    visualize_flip_probabilities(flip_probabilities, output_path + "/flip_probabilities.png")
 
-def train_clone_model(
+    return flip_probabilities
+
+def flip_features(victim_features, flip_probabilities, threshold_0=0.1, threshold_1=0.9):
+    """
+    根据翻转概率反转 `victim_features` 中的某些特征
+    - 接近 0 的特征位（flip_probabilities < threshold_0）
+    - 接近 1 的特征位（flip_probabilities > threshold_1）
+    - 接近 0.5 的特征位（在 [threshold_0, threshold_1] 范围内）
+
+    :param victim_features: 输入的特征，形状为 (batch_size, feature_dim)
+    :param flip_probabilities: 每个特征位的翻转概率，形状为 (feature_dim,)
+    :param threshold_0: 定义接近 0 的概率范围
+    :param threshold_1: 定义接近 1 的概率范围
+    :return: 反转后的特征
+    """
+    batch_size, feature_dim = victim_features.shape
+
+    # 随机生成一个 mask，决定哪些特征需要反转
+    flip_mask = torch.rand(batch_size, feature_dim).to(victim_features.device)  # 生成 0 到 1 之间的随机数
+    flip_mask = (flip_mask < flip_probabilities).float()  # 基于翻转概率生成一个 mask，0 或 1
+
+    # 将翻转的部分进行反转
+    victim_features = victim_features * (1 - flip_mask) + (1 - victim_features) * flip_mask  # 基于 mask 反转特征
+
+    return victim_features
+
+def train(
     train_loader,
     stealing_model,
     victim_model,
@@ -1152,7 +1131,7 @@ def train_clone_model(
     buckets_covered,
     args,
 ):
-
+    """
     sybil_params = []
     for sybil_no in range(args.n_sybils - 1):
         mapper = torch.load(
@@ -1165,15 +1144,16 @@ def train_clone_model(
         B = torch.Tensor(affine_transform["B"]).cuda()
 
         sybil_params.append({"mapper": mapper, "A": A, "B": B})
-
     if args.n_sybils > 1:
         batches_for_mapping = int(np.ceil(args.num_queries_mapping / args.batch_size))
 
         print(f"batches_for_mapping {batches_for_mapping}")
-
+    """
     batch_time = AverageMeter("Time", ":6.3f")
     data_time = AverageMeter("Data", ":6.3f")
     losses = AverageMeter("Loss", ":.4e")
+    # top1 = AverageMeter('Acc@1', ':6.2f')
+    # top5 = AverageMeter('Acc@5', ':6.2f')
     progress = ProgressMeter(
         len(train_loader),
         [batch_time, data_time, losses],  # , top1, top5],
@@ -1183,20 +1163,6 @@ def train_clone_model(
     end = time.time()
     num = 0
     stealing_model.train()
-    # 加载数据
-    victim_feature_path = f"{args.prefix}/outputs/victim_features_usedefence_{args.usedefence}_{args.num_queries}_output_enhance_attack_{args.enhance_attack}_repeat_times_{args.repeat_times}_query_control_{args.query_control}.npz"
-    # 创建数据集
-    victim_feature_dataset = VictimFeatureDataset(victim_feature_path)
-    victim_feature_loader = DataLoader(victim_feature_dataset, batch_size=256, shuffle=False)
-
-    # 测试加载数据
-    for victim_feature in victim_feature_loader:
-        print("Victim Feature Shape:", victim_feature.shape)
-
-        # 打印第一个 batch 的前几项具体值
-        print("Victim Feature Values (first 5 values of first batch):")
-        print(victim_feature[:5])  # 只输出前 5 个特征值
-        break  # 只输出第一个 batch
 
     size = 224
     s = 1
@@ -1205,30 +1171,44 @@ def train_clone_model(
     to_pil = transforms.ToPILImage()
     data_transforms = transforms.Compose(
         [
-            #transforms.RandomResizedCrop(size=size),
-            #transforms.RandomHorizontalFlip(),
-            #transforms.RandomApply([color_jitter], p=0.8),
-            #transforms.RandomGrayscale(p=0.2),
-            #GaussianBlur(kernel_size=int(0.1 * size)),
-
+            transforms.RandomResizedCrop(size=size),
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomApply([color_jitter], p=0.8),
+            transforms.RandomGrayscale(p=0.2),
+            GaussianBlur(kernel_size=int(0.1 * size)),
         ]
     )
 
     tloss = 0
-
+    # Initialize BinaryTransform
+    transformA = BinaryTransform(
+        base_embedding_dim=2048,  # 或根据模型实际输出的维度来设置
+        binary_relative_dim=2,    # 通过二值化将特征维度变成两倍
+        device=args.gpu,
+        debinarize=False          # 是否需要反二值化
+    )
+    transformB = BinaryTransform(
+        base_embedding_dim=2048,  # 或根据模型实际输出的维度来设置
+        binary_relative_dim=2,    # 通过二值化将特征维度变成两倍
+        device=args.gpu,
+        debinarize=False          # 是否需要反二值化
+    )
+    flip_probabilities = None  # Placeholder for flip probabilities
     # collect=[]
-    for i, ((images, classes), victim_features) in enumerate(zip(train_loader, victim_feature_loader)):
+    for i, (images, classes) in enumerate(train_loader):
         if args.n_sybils > 1:
             batches_per_attacker = int(
                 np.ceil((args.num_queries / args.batch_size) // args.n_sybils)
             )
+            #print("batches_per_attacker",batches_per_attacker)
         else:
             batches_per_attacker = int((args.num_queries / args.batch_size)) + 1
 
         # skip batches used for remapping
         skip_batches = any(
             [
-                (sybil_no * batches_per_attacker + batches_for_mapping) > i
+                #(sybil_no * batches_per_attacker + batches_for_mapping) > i
+                (sybil_no * batches_per_attacker) > i
                 and i >= sybil_no * batches_per_attacker
                 for sybil_no in range(1, args.n_sybils)
             ]
@@ -1244,17 +1224,105 @@ def train_clone_model(
         if args.gpu is not None:
             images = images.cuda(args.gpu, non_blocking=True)
 
-        victim_features = victim_features.cuda()
+        # compute output
+        with torch.no_grad():
+            if args.model_to_steal == "dino" and "vit" in args.archdino:
+                intermediate_output = victim_model.get_intermediate_layers(
+                    images, args.n_last_blocks
+                )
+                victim_features = torch.cat(
+                    [x[:, 0] for x in intermediate_output], dim=-1
+                )
+                if args.avgpool_patchtokens:
+                    victim_features = torch.cat(
+                        (
+                            victim_features.unsqueeze(-1),
+                            torch.mean(intermediate_output[-1][:, 1:], dim=1).unsqueeze(
+                                -1
+                            ),
+                        ),
+                        dim=-1,
+                    )
+                    victim_features = victim_features.reshape(
+                        victim_features.shape[0], -1
+                    )
+            else:
+                victim_features = victim_model(images)
+                #print("victim_features:",victim_features.shape)
+            # collect.append(victim_features.cpu().numpy())
+        if args.usedefence == "True":
+            g_cuda = torch.Generator()
+            g_cuda.manual_seed(i)
+            if args.n_sybils > 1:
+                stdev_value = get_stdev(
+                    i % batches_per_attacker,
+                    buckets_covered,
+                    args.lam,
+                    args.alpha,
+                    args.beta,
+                )
+            else:
+                stdev_value = get_stdev(
+                    i, buckets_covered, args.lam, args.alpha, args.beta
+                )
+            # print(i,stdev_value)
+            # print(torch.normal(0,stdev_value,size=victim_features.shape, generator=g_cuda))
+            victim_features = (
+                victim_features
+                + torch.normal(
+                    0, stdev_value, size=victim_features.shape, generator=g_cuda
+                ).cuda()
+            )
         """
-        for sybil_no, sybil in enumerate(sybil_params):
-            if (sybil_no + 2) * batches_per_attacker > i and i >= (
-                sybil_no + 1
-            ) * batches_per_attacker:
-                victim_features = torch.matmul(victim_features, sybil["A"]) + sybil["B"]
-                victim_features *= 1000 if args.model_to_steal == "simsiam" else 1
-                victim_features = sybil["mapper"](victim_features)
-                victim_features /= 1000 if args.model_to_steal == "simsiam" else 1
+        # 应用 BinaryTransform 将特征二值化
+        if args.n_sybils > 1 and flip_probabilities is None:
+            victim_features_A = get_transformed_embeddings(victim_features, transformA).cuda()
+            victim_features_B = get_transformed_embeddings(victim_features, transformB).cuda()
+            matching_bits = (victim_features_A == victim_features_B).float()
+            # 计算每个样本相同特征位的比率
+            matching_ratio = matching_bits.sum(dim=1) / victim_features_A.shape[1]
+            # 计算所有样本相同特征位的平均比率
+            average_matching_ratio = matching_ratio.mean()
+            # 打印结果
+            print(f"反转前平均相同特征位的比率: {average_matching_ratio.item():.4f}")
+
+            os.makedirs(f"{args.pathpre}/{args.model_to_steal}", exist_ok=True)
+            output_path = f"{args.pathpre}/{args.model_to_steal}/"
+            flip_probabilities = analyze_flip_probabilities(
+            userA_embeddings=victim_features_A,
+            userB_embeddings=victim_features_B,
+            output_path=output_path
+            )
+            close_to_0_percentage, close_to_1_percentage, close_to_05_percentage = compute_flip_stats(flip_probabilities)
+            print(f"接近 0 的特征位占比: {close_to_0_percentage}%")
+            print(f"接近 1 的特征位占比: {close_to_1_percentage}%")
+            print(f"接近 0.5 的特征位占比: {close_to_05_percentage}%")
+            #print("victim_features:",victim_features.shape)
+            #victim_features_A = flip_features(victim_features_A, flip_probabilities)
+            victim_features_B = flip_features(victim_features_B, flip_probabilities)
+            matching_bits = (victim_features_A == victim_features_B).float()
+            # 计算每个样本相同特征位的比率
+            matching_ratio = matching_bits.sum(dim=1) / victim_features_A.shape[1]
+            # 计算所有样本相同特征位的平均比率
+            average_matching_ratio = matching_ratio.mean()
+            print(f"反转后平均相同特征位的比率: {average_matching_ratio.item():.4f}")
+
+        if args.n_sybils > 1 and flip_probabilities is not None:
+            #print("flip_probabilities:",flip_probabilities)
+            if i < batches_per_attacker:
+                victim_features_A = get_transformed_embeddings(victim_features, transformA).cuda()
+                victim_features = victim_features_A
+            else:
+                victim_features_B = get_transformed_embeddings(victim_features, transformB).cuda()
+                victim_features_B = flip_features(victim_features_B, flip_probabilities)
+                victim_features = victim_features_B
+        else:
+            victim_features_A = get_transformed_embeddings(victim_features, transformA).cuda()
+            victim_features = victim_features_A
         """
+        victim_features_A = get_transformed_embeddings(victim_features, transformA).cuda()
+        victim_features = victim_features_A
+        #print("victim_features:",victim_features.shape)
         if args.useaug == "True":
             augment_images = []
             for image in images:
@@ -1268,8 +1336,8 @@ def train_clone_model(
                 augment_images = augment_images.cuda(args.gpu, non_blocking=True)
             stolen_features = stealing_model(augment_images)
         else:
-            stolen_features = stealing_model(images)
-
+            stolen_features = stealing_model(images).cuda()
+            #print("stolen_features:",stolen_features.shape)
         if args.losstype == "mse":
             loss = criterion(stolen_features, victim_features)
         elif args.losstype == "infonce":
@@ -1300,177 +1368,6 @@ def train_clone_model(
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
-
-        if args.query_control == "True":
-            num += len(images) * args.repeat_times
-        else:
-            num += len(images)
-        if num > args.num_queries:
-            break
-
-        if i % args.print_freq == 0:
-            progress.display(i)
-    logging.debug(f"Epoch: {epoch}. Loss: {tloss / i}")
-
-
-def train(
-    train_loader,
-    stealing_model,
-    victim_model,
-    criterion,
-    optimizer,
-    epoch,
-    buckets_covered,
-    args,
-):
-
-    sybil_params = []
-    for sybil_no in range(args.n_sybils - 1):
-        mapper = torch.load(
-            f"{args.prefix}/resources/mapper/{args.model_to_steal}/mapper_{args.num_queries_mapping}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_no_{sybil_no}"
-        ).cuda()
-        affine_transform = np.load(
-            f"{args.prefix}/resources/transformations/{args.model_to_steal}/affine_transform_{args.num_queries_mapping}_alpha{args.alpha}_beta{args.beta}_lambda{args.lam}_no_{sybil_no}.npz"
-        )
-        A = torch.Tensor(affine_transform["A"]).cuda()
-        B = torch.Tensor(affine_transform["B"]).cuda()
-
-        sybil_params.append({"mapper": mapper, "A": A, "B": B})
-
-    if args.n_sybils > 1:
-        batches_for_mapping = int(np.ceil(args.num_queries_mapping / args.batch_size))
-
-        print(f"batches_for_mapping {batches_for_mapping}")
-
-    batch_time = AverageMeter("Time", ":6.3f")
-    data_time = AverageMeter("Data", ":6.3f")
-    losses = AverageMeter("Loss", ":.4e")
-    progress = ProgressMeter(
-        len(train_loader),
-        [batch_time, data_time, losses],  # , top1, top5],
-        prefix="Epoch: [{}]".format(epoch),
-    )
-
-    end = time.time()
-    num = 0
-    stealing_model.train()
-
-    size = 224
-    s = 1
-    color_jitter = transforms.ColorJitter(0.8 * s, 0.8 * s, 0.8 * s, 0.2 * s)
-    to_tensor = transforms.ToTensor()
-    to_pil = transforms.ToPILImage()
-    data_transforms = transforms.Compose(
-        [
-            transforms.RandomResizedCrop(size=size),
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomApply([color_jitter], p=0.8),
-            transforms.RandomGrayscale(p=0.2),
-            GaussianBlur(kernel_size=int(0.1 * size)),
-        ]
-    )
-
-    tloss = 0
-
-    # collect=[]
-    #print(f"train_loader.batch_size: {train_loader.batch_size}")
-    for i, (images, classes) in enumerate(train_loader):
-        # 如果我们想要每个输入重复 2 次，可以这样处理
-        repeat_times = 8  # 你可以根据需要设定重复的次数，例如2次、4次等
-        repeated_images = torch.cat([images] * repeat_times, dim=0)
-        repeated_images = repeated_images.cuda()
-
-        # measure data loading time
-        data_time.update(time.time() - end)
-
-        if args.gpu is not None:
-            images = images.cuda(args.gpu, non_blocking=True)
-
-        # Compute output
-        with torch.no_grad():
-            if args.model_to_steal == "dino" and "vit" in args.archdino:
-                intermediate_output = victim_model.get_intermediate_layers(
-                    repeated_images, args.n_last_blocks
-                )
-                victim_features = torch.cat(
-                    [x[:, 0] for x in intermediate_output], dim=-1
-                )
-                if args.avgpool_patchtokens:
-                    victim_features = torch.cat(
-                        (
-                            victim_features.unsqueeze(-1),
-                            torch.mean(intermediate_output[-1][:, 1:], dim=1).unsqueeze(
-                                -1
-                            ),
-                        ),
-                        dim=-1,
-                    )
-                    victim_features = victim_features.reshape(
-                        victim_features.shape[0], -1
-                    )
-            else:
-                victim_features = victim_model(repeated_images)
-        save_output(clean_output_path, victim_features)
-
-
-        # 防御机制: 计算方差并添加高斯噪声
-        if args.usedefence == "True":
-            g_cuda = torch.Generator()
-            g_cuda.manual_seed(i)
-            stdev_value = get_stdev(i, buckets_covered, args.lam, args.alpha, args.beta)
-            print(i,stdev_value,buckets_covered[i]) #TODO
-            victim_features = (
-                victim_features
-                + torch.normal(
-                    0, stdev_value, size=victim_features.shape, generator=g_cuda
-                ).cuda()
-            )
-            save_output(noisy_output_path, victim_features)
-        # 对重复的特征取平均
-        victim_features = repeat_and_average(victim_features, repeat_times)
-
-        if args.useaug == "True":
-            augment_images = []
-            for image in images:
-                aug_image = to_pil(image)
-                aug_image = data_transforms(aug_image)
-                aug_image = to_tensor(aug_image)
-                augment_images.append(aug_image)
-
-            augment_images = torch.stack(augment_images)
-            if args.gpu is not None:
-                augment_images = augment_images.cuda(args.gpu, non_blocking=True)
-            stolen_features = stealing_model(augment_images)
-        else:
-            stolen_features = stealing_model(images)
-
-        if args.losstype == "mse":
-            loss = criterion(stolen_features, victim_features)
-        elif args.losstype == "infonce":
-            all_features = torch.cat([stolen_features, victim_features], dim=0)
-            logits, labels = info_nce_loss(all_features, args)
-            logits = logits.cuda(args.gpu, non_blocking=True)
-            labels = labels.cuda(args.gpu, non_blocking=True)
-            loss = criterion(logits, labels)
-
-        elif args.losstype == "softnn":
-            all_features = torch.cat([stolen_features, victim_features], dim=0)
-            loss = criterion(
-                args, all_features, pairwise_euclid_distance, args.temperaturesn
-            )
-
-        # measure accuracy and record loss
-        losses.update(loss.item(), images.size(0))
-        tloss += loss.item()
-
-        # compute gradient and do SGD step
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
         num += len(images)
         if num > args.num_queries:
             break
@@ -1478,7 +1375,9 @@ def train(
         if i % args.print_freq == 0:
             progress.display(i)
     logging.debug(f"Epoch: {epoch}. Loss: {tloss / i}")
-
+    # print average over batch
+    # collect=np.vstack(collect)
+    # np.savez("collected-noise-imagenet.npz", np.float32(collect))
 
 if __name__ == "__main__":
     main()
